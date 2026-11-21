@@ -101,3 +101,174 @@ msgstr "Revert"
 
 msgid "o navegador do Glove OS"
 msgstr "the Glove OS browser"
+
+msgid "A página da Jangada"
+msgstr "Jangada's page"
+
+msgid "Abrir a Pasta Downloads"
+msgstr "Open the Downloads Folder"
+
+msgid "Adicionada aos Favoritos."
+msgstr "Added to Favorites."
+
+msgid "Adicionar Link aos Favoritos"
+msgstr "Add Link to Favorites"
+
+msgid "Adicionar aos Favoritos"
+msgstr "Add to Favorites"
+
+msgid "Ao abrir a Jangada, reabrir as abas da última vez"
+msgstr "When Jangada opens, reopen the tabs from last time"
+
+msgid "Apagar"
+msgstr "Delete"
+
+msgid "Apagar Cookies e Dados dos Sites…"
+msgstr "Delete Cookies and Site Data…"
+
+msgid "Apagar os cookies e os dados dos sites?"
+msgstr "Delete cookies and site data?"
+
+msgid "As extensões da loja do Chrome ainda não funcionam na Jangada: o motor sem janela própria não as carrega."
+msgstr "Chrome Web Store extensions do not work in Jangada yet: the windowless engine does not load them."
+
+msgid "Avançado"
+msgstr "Advanced"
+
+msgid "Barra os anúncios e os rastreadores conhecidos antes de carregar: as páginas ficam mais leves e mais rápidas."
+msgstr "Stops known ads and trackers before they load: pages get lighter and faster."
+
+msgid "Bloqueador de anúncios e rastreadores"
+msgstr "Ad and tracker blocker"
+
+msgid "Bloquear janelas que as páginas abrem sozinhas"
+msgstr "Block windows that pages open by themselves"
+
+msgid "Buscador da barra de endereço e da página inicial"
+msgstr "Search engine for the address bar and the start page"
+
+msgid "Buscar na Página…"
+msgstr "Find on Page…"
+
+msgid "Concluído"
+msgstr "Done"
+
+msgid "Cookies apagados."
+msgstr "Cookies deleted."
+
+msgid "Dados guardados"
+msgstr "Stored data"
+
+msgid "Esconder a Barra de Favoritos"
+msgstr "Hide Favorites Bar"
+
+msgid "Escurece as páginas que não têm um modo escuro próprio (vale ao reabrir a Jangada)."
+msgstr "Darkens pages that have no dark mode of their own (takes effect when Jangada reopens)."
+
+msgid "Extensões"
+msgstr "Extensions"
+
+msgid "Extensões da Jangada"
+msgstr "Jangada extensions"
+
+msgid "Favoritos"
+msgstr "Favorites"
+
+msgid "Geral"
+msgstr "General"
+
+msgid "Janela que a página abriu sozinha foi bloqueada"
+msgstr "A window the page opened by itself was blocked"
+
+msgid "Limpar"
+msgstr "Clear"
+
+msgid "Limpar o Histórico…"
+msgstr "Clear History…"
+
+msgid "Limpar todo o histórico?"
+msgstr "Clear all history?"
+
+msgid "Modo escuro nas páginas"
+msgstr "Dark mode on pages"
+
+msgid "Mostrar a Barra de Favoritos"
+msgstr "Show Favorites Bar"
+
+msgid "Mostrar a barra de favoritos"
+msgstr "Show the favorites bar"
+
+msgid "Mostrar o endereço completo na barra"
+msgstr "Show the full address in the bar"
+
+msgid "Nada encontrado"
+msgstr "Not found"
+
+msgid "Não foi possível salvar o PDF."
+msgstr "Could not save the PDF."
+
+msgid "O DuckDuckGo, o Ecosia, o Brave Search e o Startpage não guardam o que você busca."
+msgstr "DuckDuckGo, Ecosia, Brave Search and Startpage do not keep what you search for."
+
+msgid "O modo escuro nas páginas e a placa de vídeo só mudam quando a Jangada abre."
+msgstr "Dark mode on pages and the graphics card only change when Jangada opens."
+
+msgid "Os sites visitados saem do menu Histórico. Os favoritos ficam."
+msgstr "Visited sites leave the History menu. Favorites stay."
+
+msgid "PDF salvo em Downloads: {}"
+msgstr "PDF saved to Downloads: {}"
+
+msgid "Pedir aos sites para não rastrear (Não Rastrear e GPC)"
+msgstr "Ask sites not to track (Do Not Track and GPC)"
+
+msgid "Preferências da Jangada"
+msgstr "Jangada Preferences"
+
+msgid "Privacidade"
+msgstr "Privacy"
+
+msgid "Página inicial e das abas novas"
+msgstr "Home page and new tabs"
+
+msgid "Reabra a Jangada para a mudança valer."
+msgstr "Reopen Jangada for the change to take effect."
+
+msgid "Saiu dos Favoritos."
+msgstr "Removed from Favorites."
+
+msgid "Salvar Página como PDF"
+msgstr "Save Page as PDF"
+
+msgid "Salvar como PDF…"
+msgstr "Save as PDF…"
+
+msgid "Sem ela a Jangada gasta menos memória; com ela, vídeos e jogos ficam mais leves para o processador."
+msgstr "Without it Jangada uses less memory; with it, videos and games are lighter on the processor."
+
+msgid "Tamanho Padrão"
+msgstr "Default Size"
+
+msgid "Tamanho das páginas"
+msgstr "Page size"
+
+msgid "Tirar dos Favoritos"
+msgstr "Remove from Favorites"
+
+msgid "Um endereço"
+msgstr "An address"
+
+msgid "Usar a Página Atual"
+msgstr "Use Current Page"
+
+msgid "Usar a placa de vídeo (vale ao reabrir a Jangada)"
+msgstr "Use the graphics card (takes effect when Jangada reopens)"
+
+msgid "Você sai das contas em que entrou nos sites."
+msgstr "You will be signed out of the sites you are signed in to."
+
+msgid "{} de {}"
+msgstr "{} of {}"
+
+msgid "{} encontrados"
+msgstr "{} found"

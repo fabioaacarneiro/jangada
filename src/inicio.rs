@@ -68,7 +68,7 @@ main{{flex:1;display:flex;flex-direction:column;align-items:center;padding-top:9
 form{{width:min(600px,86vw)}}input{{width:100%;font-size:17px;padding:13px 20px;border-radius:24px;border:1px solid {borda};background:{cartao};color:{texto};outline:none;box-shadow:0 1px 3px rgba(0,0,0,.08)}}\
 input:focus{{border-color:#2f7cf6;box-shadow:0 0 0 4px rgba(47,124,246,.25)}}\
 .sites{{display:grid;grid-template-columns:repeat(4,104px);gap:20px 22px;margin-top:40px}}\
-.sites a{{display:flex;flex-direction:column;align-items:center;gap:8px;text-decoration:none;color:{texto};font-size:12.5px}}\
+.sites a{{display:flex;flex-direction:column;align-items:center;gap:8px;text-decoration:none;color:{texto};font-size:12.5px;max-width:104px}}.sites .nome{{max-width:104px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}\
 .sites .ic{{width:60px;height:60px;border-radius:15px;background:{cartao};border:1px solid {borda};display:flex;align-items:center;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.08);transition:transform .12s}}\
 .sites a:hover .ic{{transform:scale(1.06)}}.sites img{{width:30px;height:30px}}\
 footer{{padding:20px;font-size:11.5px;color:{apagado};display:flex;align-items:center;gap:7px}}footer img{{width:18px;height:18px}}\
@@ -81,27 +81,37 @@ fn rodape(fonts: &Fonts) -> String {
     format!("<footer><img src=\"{}\" alt=\"\">Jangada · {}</footer>", img(fonts, None, 36), esc(glove_config::tr!("o navegador do Glove OS")))
 }
 
-/// Grava a página inicial em `dir` (refeita a cada vez que a Jangada abre: segue o tema
-/// e o idioma) e devolve o caminho.
-pub fn pagina_inicial(dir: &Path, fonts: &Fonts, escuro: bool) -> PathBuf {
+/// Grava a página inicial em `dir` (refeita a cada vez que a Jangada abre: segue o tema,
+/// o idioma, o buscador e os favoritos) e devolve o caminho. Os atalhos são os favoritos
+/// (até 12); sem favoritos, uns sites conhecidos.
+pub fn pagina_inicial(dir: &Path, fonts: &Fonts, escuro: bool, busca: &str, favoritos: &[(String, String)]) -> PathBuf {
     let mut sites = String::new();
-    for (nome, url) in ATALHOS {
-        let host = url.split("//").nth(1).unwrap_or(url);
+    let lista: Vec<(String, String)> = if favoritos.is_empty() {
+        ATALHOS.iter().map(|(n, u)| (n.to_string(), u.to_string())).collect()
+    } else {
+        favoritos.iter().take(12).cloned().collect()
+    };
+    for (nome, url) in &lista {
+        let host = url.split("//").nth(1).unwrap_or(url).split('/').next().unwrap_or("");
+        let nome: String = nome.chars().take(22).collect();
         sites.push_str(&format!(
-            "<a href=\"{url}\"><span class=ic><img src=\"https://icons.duckduckgo.com/ip3/{host}.ico\" alt=\"\"></span>{}</a>",
-            esc(nome)
+            "<a href=\"{}\"><span class=ic><img src=\"https://icons.duckduckgo.com/ip3/{}.ico\" alt=\"\"></span><span class=nome>{}</span></a>",
+            esc(url),
+            esc(host),
+            esc(&nome)
         ));
     }
     let html = format!(
         "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\"><title>{titulo}</title><style>{css}</style></head><body><main>\
 <img class=logo src=\"{logo}\" alt=\"\"><h1>Jangada</h1>\
-<form action=\"https://duckduckgo.com/\" method=get><input name=q placeholder=\"{busca}\" autofocus autocomplete=off></form>\
+<form onsubmit=\"var q=this.q.value.trim();if(q)location.href='{busca}'+encodeURIComponent(q);return false\"><input name=q placeholder=\"{dica}\" autofocus autocomplete=off></form>\
 <div class=sites>{sites}</div></main>{rodape}</body></html>",
         lang = if glove_config::idioma().starts_with("en") { "en" } else { "pt-BR" },
         titulo = esc(glove_config::tr!("Início")),
         css = estilo(escuro),
         logo = img(fonts, Some(icons::Icon::Jangada), 224),
-        busca = esc(glove_config::tr!("Buscar na web")),
+        busca = esc(busca),
+        dica = esc(glove_config::tr!("Buscar na web")),
         rodape = rodape(fonts),
     );
     let p = dir.join("inicio.html");

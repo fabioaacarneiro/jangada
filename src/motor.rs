@@ -50,11 +50,15 @@ pub struct Pagina {
     /// da Jangada; e o endereço que falhou enquanto ela está à vista.
     pub erro_pedido: Option<(String, String)>,
     pub erro_url: Option<String>,
+    /// Buscar na página: (o atual, quantos achou).
+    pub achados: (i32, i32),
+    /// Endereço pedido antes de o motor terminar de criar a aba (carrega quando ficar pronta).
+    pub pendente: Option<String>,
 }
 
 impl Pagina {
     pub fn new(scale: f32) -> Self {
-        Self { w: 800, h: 600, scale, frame: Vec::new(), fw: 0, fh: 0, popup: None, popup_frame: Vec::new(), pw: 0, ph: 0, dirty: true, title: String::new(), url: String::new(), loading: true, back: false, forward: false, browser: None, ctx: None, dialog: None, tooltip: String::new(), status: String::new(), cursor: glove_ui::Cursor::Arrow, favicon: None, favicon_url: String::new(), favicon_novo: false, erro_pedido: None, erro_url: None }
+        Self { w: 800, h: 600, scale, frame: Vec::new(), fw: 0, fh: 0, popup: None, popup_frame: Vec::new(), pw: 0, ph: 0, dirty: true, title: String::new(), url: String::new(), loading: true, back: false, forward: false, browser: None, ctx: None, dialog: None, tooltip: String::new(), status: String::new(), cursor: glove_ui::Cursor::Arrow, favicon: None, favicon_url: String::new(), favicon_novo: false, erro_pedido: None, erro_url: None, achados: (0, 0), pendente: None }
     }
 }
 
@@ -114,7 +118,11 @@ wrap_app! {
             // Leve para máquinas fracas: sem o processo da placa de vídeo (a página é
             // desenhada pelo processador e copiada para a janela); poucos processos de
             // página; sem o cache de voltar (páginas inteiras guardadas na memória).
-            if std::env::var_os("JANGADA_GPU").is_none() {
+            let aj = crate::ajustes::Ajustes::carregar();
+            if aj.escuro_nas_paginas {
+                val(cl, "enable-features", "WebContentsForceDark");
+            }
+            if std::env::var_os("JANGADA_GPU").is_none() && !aj.placa_de_video {
                 sw(cl, "disable-gpu");
                 sw(cl, "disable-gpu-compositing");
             }
@@ -244,6 +252,10 @@ wrap_display_handler! {
             if let Ok(mut p) = self.p.try_borrow_mut() {
                 p.title = s(title);
                 p.dirty = true;
+                // O histórico guarda a página com o título dela.
+                if p.erro_url.is_none() {
+                    crate::ajustes::visitar(&p.title, &p.url);
+                }
             }
         }
 
@@ -389,8 +401,12 @@ wrap_life_span_handler! {
         /// Janela nova pedida pela página: vira uma aba.
         fn on_before_popup(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _popup_id: ::std::os::raw::c_int, target_url: Option<&CefString>, _target_frame_name: Option<&CefString>, _target_disposition: WindowOpenDisposition, _user_gesture: ::std::os::raw::c_int, _popup_features: Option<&PopupFeatures>, _window_info: Option<&mut WindowInfo>, _client: Option<&mut Option<Client>>, _settings: Option<&mut BrowserSettings>, _extra_info: Option<&mut Option<DictionaryValue>>, _no_javascript_access: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
             let url = s(target_url);
-            if !url.is_empty() {
+            // Janelas que a página abre sozinha (sem um clique) ficam bloqueadas, se ligado.
+            let sozinha = _user_gesture == 0 && crate::ajustes::BLOQUEAR_JANELAS.load(std::sync::atomic::Ordering::Relaxed);
+            if !url.is_empty() && !sozinha {
                 NOVAS_ABAS.with(|n| n.borrow_mut().push(url));
+            } else if sozinha {
+                AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Janela que a página abriu sozinha foi bloqueada").to_string()));
             }
             1
         }
@@ -495,6 +511,74 @@ wrap_jsdialog_handler! {
     }
 }
 
+wrap_find_handler! {
+    pub struct Achar {
+        p: Shared,
+    }
+
+    impl FindHandler {
+        fn on_find_result(&self, _browser: Option<&mut Browser>, _identifier: ::std::os::raw::c_int, count: ::std::os::raw::c_int, _selection_rect: Option<&cef::Rect>, active_match_ordinal: ::std::os::raw::c_int, _final_update: ::std::os::raw::c_int) {
+            if let Ok(mut p) = self.p.try_borrow_mut() {
+                p.achados = (active_match_ordinal, count);
+                p.dirty = true;
+            }
+        }
+    }
+}
+
+// O bloqueador e o "Não Rastrear" (rodam fora da linha principal: nada de `Shared` aqui).
+wrap_resource_request_handler! {
+    pub struct Filtro;
+
+    impl ResourceRequestHandler {
+        fn on_before_resource_load(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, request: Option<&mut Request>, _callback: Option<&mut Callback>) -> ReturnValue {
+            let Some(r) = request else { return ReturnValue::CONTINUE };
+            if crate::ajustes::BLOQUEAR.load(std::sync::atomic::Ordering::Relaxed) {
+                let url = CefString::from(&r.url()).to_string();
+                if crate::ajustes::bloqueado(&url) {
+                    return ReturnValue::CANCEL;
+                }
+            }
+            if crate::ajustes::NAO_RASTREAR.load(std::sync::atomic::Ordering::Relaxed) {
+                r.set_header_by_name(Some(&"DNT".into()), Some(&"1".into()), 1);
+                r.set_header_by_name(Some(&"Sec-GPC".into()), Some(&"1".into()), 1);
+            }
+            ReturnValue::CONTINUE
+        }
+    }
+}
+
+wrap_request_handler! {
+    pub struct Pedidos;
+
+    impl RequestHandler {
+        fn resource_request_handler(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _request: Option<&mut Request>, _is_navigation: ::std::os::raw::c_int, _is_download: ::std::os::raw::c_int, _request_initiator: Option<&CefString>, _disable_default_handling: Option<&mut ::std::os::raw::c_int>) -> Option<ResourceRequestHandler> {
+            Some(Filtro::new())
+        }
+    }
+}
+
+wrap_pdf_print_callback! {
+    pub struct Pdf;
+
+    impl PdfPrintCallback {
+        fn on_pdf_print_finished(&self, path: Option<&CefString>, ok: ::std::os::raw::c_int) {
+            let nome = s(path);
+            let nome = std::path::Path::new(&nome).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(nome);
+            AVISOS.with(|a| a.borrow_mut().push(if ok != 0 { glove_config::tr!("PDF salvo em Downloads: {}", nome) } else { glove_config::tr!("Não foi possível salvar o PDF.").to_string() }));
+        }
+    }
+}
+
+/// Salva a página como PDF na pasta Downloads.
+pub fn salvar_pdf(host: &BrowserHost, titulo: &str) {
+    let nome: String = titulo.chars().map(|c| if "/\\:*?\"<>|".contains(c) { '_' } else { c }).collect();
+    let nome = if nome.trim().is_empty() { "pagina".to_string() } else { nome.trim().chars().take(80).collect() };
+    let path = livre(&crate::pasta_downloads().join(format!("{nome}.pdf")));
+    let settings = PdfPrintSettings { print_background: 1, ..Default::default() };
+    host.print_to_pdf(Some(&path.to_string_lossy().as_ref().into()), Some(&settings), Some(&mut Pdf::new()));
+}
+
 wrap_client! {
     pub struct Cliente {
         desenho: RenderHandler,
@@ -504,9 +588,17 @@ wrap_client! {
         menu: ContextMenuHandler,
         baixar: DownloadHandler,
         dialogo: JsdialogHandler,
+        achar: FindHandler,
+        pedidos: RequestHandler,
     }
 
     impl Client {
+        fn find_handler(&self) -> Option<FindHandler> {
+            Some(self.achar.clone())
+        }
+        fn request_handler(&self) -> Option<RequestHandler> {
+            Some(self.pedidos.clone())
+        }
         fn render_handler(&self) -> Option<RenderHandler> {
             Some(self.desenho.clone())
         }
@@ -545,6 +637,6 @@ fn livre(path: &std::path::Path) -> std::path::PathBuf {
 pub fn nova_aba(p: &Shared, url: &str) -> bool {
     let window_info = WindowInfo { windowless_rendering_enabled: 1, runtime_style: RuntimeStyle::ALLOY, ..Default::default() };
     let settings = BrowserSettings { windowless_frame_rate: 60, background_color: 0xffff_ffff, ..Default::default() };
-    let mut client = Cliente::new(Desenho::new(p.clone()), Exibicao::new(p.clone()), Carga::new(p.clone()), Vida::new(p.clone()), MenuPagina::new(p.clone()), Baixar::new(p.clone()), Dialogo::new(p.clone()));
+    let mut client = Cliente::new(Desenho::new(p.clone()), Exibicao::new(p.clone()), Carga::new(p.clone()), Vida::new(p.clone()), MenuPagina::new(p.clone()), Baixar::new(p.clone()), Dialogo::new(p.clone()), Achar::new(p.clone()), Pedidos::new());
     browser_host_create_browser(Some(&window_info), Some(&mut client), Some(&url.into()), Some(&settings), None, None) == 1
 }

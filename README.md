@@ -22,13 +22,29 @@ Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 - **Barra de endereço** (como a do Safari): fora de foco mostra só o site, com o cadeado; clique ou
   Ctrl+L e digite um endereço ou uma busca (DuckDuckGo). Esc volta. Recarregar e parar ficam dentro
   dela.
-- **Abas:** Ctrl+T abre (na página inicial), Ctrl+W fecha, Ctrl+Tab passa; links que abrem janela
-  nova viram abas. Cada aba mostra o ícone do site.
+- **Abas** como as do Safari: todas da mesma largura, a escolhida em destaque, o ícone do site e o
+  título no meio, o × ao passar o mouse. Ctrl+T abre, Ctrl+W fecha, Ctrl+Tab passa; links que
+  abrem janela nova viram abas.
 - **Página inicial** própria, com a busca e os atalhos dos sites; **página de erro** própria.
 - **Botão direito:** o menu do Glove, solto, por cima de tudo (abrir o link em nova aba, copiar,
   colar, buscar o texto escolhido).
 - **Downloads** direto na pasta Downloads; **avisos das páginas** (alert e confirm) como alertas do
   Glove, em janela própria; a mãozinha nos links e a barra de texto nos campos.
+- **Favoritos:** a estrela no campo de endereço (ou Ctrl+D) guarda a página; a barra de favoritos
+  (Ctrl+Shift+B) e o menu Favoritos levam a elas, e a página inicial mostra os favoritos.
+- **Histórico:** os últimos sites no menu Histórico; Limpar o Histórico… nas Preferências.
+- **Buscar na página** (Ctrl+F), com quantos achou e anterior/próximo; **Salvar como PDF** (Ctrl+P),
+  na pasta Downloads.
+- **Preferências** (Ctrl+,), como as do Safari:
+  - *Geral:* página inicial (a da Jangada ou um endereço), reabrir as abas da última vez, a barra de
+    favoritos e o tamanho padrão das páginas;
+  - *Busca:* DuckDuckGo, Google, Bing, Ecosia, Brave Search ou Startpage;
+  - *Privacidade:* bloquear as janelas que as páginas abrem sozinhas, pedir para não rastrear (Não
+    Rastrear e GPC), limpar o histórico, apagar cookies e dados dos sites;
+  - *Extensões:* o **bloqueador de anúncios e rastreadores** (vem ligado) e o **modo escuro nas
+    páginas**. As extensões da loja do Chrome ainda não funcionam: o motor sem janela própria não
+    as carrega;
+  - *Avançado:* o endereço completo na barra, usar a placa de vídeo e a pasta Downloads.
 - Abrir de novo (`jangada endereço`) abre uma aba na janela que já está aberta.
 - No pacote, a Jangada vira o navegador padrão do sistema (`x-www-browser`).
 
