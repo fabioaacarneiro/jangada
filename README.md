@@ -11,7 +11,9 @@ no visual clássico ou no Moderno (claro e escuro).
 
 Feita para computadores modestos:
 
-- sem o processo da placa de vídeo: a página é desenhada pelo processador e copiada para a janela;
+- sem o processo da placa de vídeo: a página é desenhada pelo processador e copiada para a janela,
+  só nas partes que mudaram (passar o mouse ou um cursor piscando não recopia a página inteira);
+- a janela só é refeita quando algo muda (parada, a Jangada quase não gasta processador);
 - no máximo 4 processos de página, sem o cache de voltar (páginas inteiras na memória) e sem rede
   de fundo (atualizações de componentes, tradução, sugestões).
 
@@ -19,22 +21,31 @@ Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 
 ## Como usar
 
+- **Janela sem barra de título**, como a do Safari: os botões de fechar, minimizar e zoom ficam na
+  própria barra da Jangada, ao lado de voltar e avançar; arrastar a barra (ou o espaço livre das
+  abas) move a janela, e dois cliques dão o zoom. Sobra mais espaço para a página.
 - **Barra de endereço** (como a do Safari): fora de foco mostra só o site, com o cadeado; clique ou
   Ctrl+L e digite um endereço ou uma busca (DuckDuckGo). Esc volta. Recarregar e parar ficam dentro
   dela.
-- **Abas** como as do Safari: todas da mesma largura, a escolhida em destaque, o ícone do site e o
-  título no meio, o × ao passar o mouse. Ctrl+T abre, Ctrl+W fecha, Ctrl+Tab passa; links que
-  abrem janela nova viram abas.
+- **Abas** como as do Safari: todas da mesma largura, a escolhida em destaque, as outras um tom
+  acima da faixa, o ícone do site e o título no meio, o × ao passar o mouse e um + logo depois da
+  última. Ctrl+T abre, Ctrl+W fecha, Ctrl+Shift+T reabre a última fechada, Ctrl+Tab passa; links
+  que abrem janela nova viram abas, e o botão do meio (ou Ctrl + clique) abre o link numa aba por
+  trás. O botão do meio numa aba a fecha.
 - **Página inicial** própria, com a busca e os atalhos dos sites; **página de erro** própria.
 - **Botão direito:** o menu do Glove, solto, por cima de tudo (abrir o link em nova aba, copiar,
   colar, buscar o texto escolhido).
-- **Downloads** direto na pasta Downloads; **avisos das páginas** (alert e confirm) como alertas do
+- **Downloads** direto na pasta Downloads, com a janela Downloads (Ctrl+J, ou a seta na barra):
+  o andamento, abrir, mostrar na pasta e cancelar; **avisos das páginas** (alert e confirm) como alertas do
   Glove, em janela própria; a mãozinha nos links e a barra de texto nos campos.
 - **Favoritos:** a estrela no campo de endereço (ou Ctrl+D) guarda a página; a barra de favoritos
   (Ctrl+Shift+B) e o menu Favoritos levam a elas, e a página inicial mostra os favoritos.
-- **Histórico:** os últimos sites no menu Histórico; Limpar o Histórico… nas Preferências.
-- **Buscar na página** (Ctrl+F), com quantos achou e anterior/próximo; **Salvar como PDF** (Ctrl+P),
-  na pasta Downloads.
+- **Histórico:** os últimos sites no menu Histórico e todos na janela Histórico (Ctrl+H), com
+  busca; Reabrir a Última Aba Fechada e **Reabrir as Abas da Última Sessão** (as abas que estavam
+  abertas da última vez que a Jangada fechou); Limpar o Histórico… nas Preferências.
+- **Buscar na página** (Ctrl+F), com quantos achou e anterior/próximo; **Imprimir** (Ctrl+P), pela
+  folha Imprimir do Glove (impressoras do CUPS, cópias, páginas, pré-visualizar), e **Salvar como
+  PDF** (menu Arquivo), na pasta Downloads.
 - **Preferências** (Ctrl+,), como as do Safari:
   - *Geral:* página inicial (a da Jangada ou um endereço), reabrir as abas da última vez, a barra de
     favoritos e o tamanho padrão das páginas;

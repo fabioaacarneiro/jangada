@@ -14,10 +14,13 @@ pub struct Pagina {
     pub w: i32,
     pub h: i32,
     pub scale: f32,
-    /// A imagem da página (RGBA pré-multiplicado, em pixels) e o tamanho dela.
-    pub frame: Vec<u8>,
-    pub fw: i32,
-    pub fh: i32,
+    /// A imagem da página (RGBA pré-multiplicado), já do tamanho da janela, e a versão
+    /// dela (muda a cada imagem nova: a janela só a recopia quando muda).
+    pub tela: Option<glove_ui::paint::draw::Canvas>,
+    pub versao: u64,
+    /// A versão de cada faixa de `FAIXA` linhas de pixel (só as que mudaram vão para a
+    /// tela de novo: um cursor piscando não recopia a página inteira).
+    pub faixas: Vec<u64>,
     /// Lista suspensa da página (<select>), desenhada por cima: onde e a imagem.
     pub popup: Option<cef::Rect>,
     pub popup_frame: Vec<u8>,
@@ -58,7 +61,7 @@ pub struct Pagina {
 
 impl Pagina {
     pub fn new(scale: f32) -> Self {
-        Self { w: 800, h: 600, scale, frame: Vec::new(), fw: 0, fh: 0, popup: None, popup_frame: Vec::new(), pw: 0, ph: 0, dirty: true, title: String::new(), url: String::new(), loading: true, back: false, forward: false, browser: None, ctx: None, dialog: None, tooltip: String::new(), status: String::new(), cursor: glove_ui::Cursor::Arrow, favicon: None, favicon_url: String::new(), favicon_novo: false, erro_pedido: None, erro_url: None, achados: (0, 0), pendente: None }
+        Self { w: 800, h: 600, scale, tela: None, versao: 0, faixas: Vec::new(), popup: None, popup_frame: Vec::new(), pw: 0, ph: 0, dirty: true, title: String::new(), url: String::new(), loading: true, back: false, forward: false, browser: None, ctx: None, dialog: None, tooltip: String::new(), status: String::new(), cursor: glove_ui::Cursor::Arrow, favicon: None, favicon_url: String::new(), favicon_novo: false, erro_pedido: None, erro_url: None, achados: (0, 0), pendente: None }
     }
 }
 
@@ -76,12 +79,33 @@ pub struct Contexto {
 pub type Shared = StdRc<RefCell<Pagina>>;
 
 thread_local! {
-    /// Endereços que pediram aba nova (target=_blank, window.open).
-    pub static NOVAS_ABAS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Endereços que pediram aba nova (target=_blank, window.open) e se ela abre por
+    /// trás (botão do meio, Ctrl + clique).
+    pub static NOVAS_ABAS: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
     /// Quando o motor quer trabalhar de novo (ms; o CEF avisa).
     pub static BOMBA: Cell<i64> = const { Cell::new(0) };
     /// Avisos para a barra de baixo (downloads).
     pub static AVISOS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Os downloads desta vez (a janela Downloads), do mais velho para o mais novo.
+    pub static DOWNLOADS: RefCell<Vec<Download>> = const { RefCell::new(Vec::new()) };
+    /// A página virou PDF para imprimir: o arquivo (o app abre a folha Imprimir).
+    pub static IMPRIMIR: RefCell<Option<std::path::PathBuf>> = const { RefCell::new(None) };
+    /// Mudou algo nos downloads (o app redesenha).
+    pub static DOWNLOADS_MUDOU: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Um download: o nome, onde fica, quanto chegou e o estado.
+pub struct Download {
+    pub id: u32,
+    pub nome: String,
+    pub caminho: std::path::PathBuf,
+    pub recebido: i64,
+    pub total: i64,
+    pub velocidade: i64,
+    pub pronto: bool,
+    pub cancelado: bool,
+    /// Para cancelar enquanto baixa.
+    pub cb: Option<DownloadItemCallback>,
 }
 
 fn s(v: Option<&CefString>) -> String {
@@ -89,8 +113,15 @@ fn s(v: Option<&CefString>) -> String {
 }
 
 /// BGRA (do motor) para RGBA (do glove-paint), os dois pré-multiplicados.
+/// Altura das faixas da imagem da página (em pixels).
+pub const FAIXA: i32 = 64;
+
 fn bgra_to_rgba(src: &[u8], dst: &mut Vec<u8>) {
     dst.resize(src.len(), 0);
+    bgra_to_rgba_em(src, dst);
+}
+
+fn bgra_to_rgba_em(src: &[u8], dst: &mut [u8]) {
     for (d, s) in dst.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
         d[0] = s[2];
         d[1] = s[1];
@@ -201,7 +232,7 @@ wrap_render_handler! {
             }
         }
 
-        fn on_paint(&self, _browser: Option<&mut Browser>, type_: PaintElementType, _dirty_rects: Option<&[cef::Rect]>, buffer: *const u8, width: ::std::os::raw::c_int, height: ::std::os::raw::c_int) {
+        fn on_paint(&self, _browser: Option<&mut Browser>, type_: PaintElementType, dirty_rects: Option<&[cef::Rect]>, buffer: *const u8, width: ::std::os::raw::c_int, height: ::std::os::raw::c_int) {
             if buffer.is_null() || width <= 0 || height <= 0 {
                 return;
             }
@@ -215,11 +246,43 @@ wrap_render_handler! {
                 p.pw = width;
                 p.ph = height;
             } else {
-                let mut f = std::mem::take(&mut p.frame);
-                bgra_to_rgba(src, &mut f);
-                p.frame = f;
-                p.fw = width;
-                p.fh = height;
+                // Direto na imagem da aba, só nas áreas que mudaram (o motor diz quais):
+                // passar o mouse sobre um link não copia a página inteira de novo.
+                let escala = p.scale.max(0.5);
+                let ok = p.tela.as_ref().is_some_and(|c| c.px_width() == width as u32 && c.px_height() == height as u32);
+                if !ok {
+                    p.tela = glove_ui::paint::draw::Canvas::new(width as f32 / escala, height as f32 / escala, escala).filter(|c| c.px_width() == width as u32 && c.px_height() == height as u32);
+                }
+                let areas: Vec<(i32, i32, i32, i32)> = match dirty_rects {
+                    Some(r) if ok && !r.is_empty() => r.iter().map(|r| (r.x, r.y, r.width, r.height)).collect(),
+                    _ => vec![(0, 0, width, height)],
+                };
+                let versao = p.versao.wrapping_add(1);
+                let nf = (height as usize).div_ceil(FAIXA as usize);
+                if !ok || p.faixas.len() != nf {
+                    p.faixas = vec![versao; nf];
+                }
+                for &(_, y, _, h) in &areas {
+                    let (a, b) = ((y.max(0) / FAIXA) as usize, (((y + h).min(height) + FAIXA - 1) / FAIXA) as usize);
+                    for f in a..b.min(nf) {
+                        p.faixas[f] = versao;
+                    }
+                }
+                let Some(c) = p.tela.as_mut() else { return };
+                let dst = c.pixels_mut();
+                for (x, y, w, h) in areas {
+                    let (x0, y0) = (x.clamp(0, width), y.clamp(0, height));
+                    let (x1, y1) = ((x + w).clamp(0, width), (y + h).clamp(0, height));
+                    if x0 >= x1 {
+                        continue;
+                    }
+                    for yy in y0..y1 {
+                        let a = ((yy * width + x0) * 4) as usize;
+                        let b = ((yy * width + x1) * 4) as usize;
+                        bgra_to_rgba_em(&src[a..b], &mut dst[a..b]);
+                    }
+                }
+                p.versao = p.versao.wrapping_add(1);
             }
             p.dirty = true;
         }
@@ -404,7 +467,7 @@ wrap_life_span_handler! {
             // Janelas que a página abre sozinha (sem um clique) ficam bloqueadas, se ligado.
             let sozinha = _user_gesture == 0 && crate::ajustes::BLOQUEAR_JANELAS.load(std::sync::atomic::Ordering::Relaxed);
             if !url.is_empty() && !sozinha {
-                NOVAS_ABAS.with(|n| n.borrow_mut().push(url));
+                NOVAS_ABAS.with(|n| n.borrow_mut().push((url, _target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB)));
             } else if sozinha {
                 AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Janela que a página abriu sozinha foi bloqueada").to_string()));
             }
@@ -463,8 +526,35 @@ wrap_download_handler! {
             1
         }
 
-        fn on_download_updated(&self, _browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, _callback: Option<&mut DownloadItemCallback>) {
+        fn on_download_updated(&self, _browser: Option<&mut Browser>, download_item: Option<&mut DownloadItem>, callback: Option<&mut DownloadItemCallback>) {
             let Some(d) = download_item else { return };
+            let caminho = std::path::PathBuf::from(CefString::from(&d.full_path()).to_string());
+            DOWNLOADS.with(|l| {
+                let mut l = l.borrow_mut();
+                let id = d.id();
+                let i = match l.iter().position(|x| x.id == id) {
+                    Some(i) => i,
+                    None => {
+                        l.push(Download { id, nome: String::new(), caminho: std::path::PathBuf::new(), recebido: 0, total: 0, velocidade: 0, pronto: false, cancelado: false, cb: None });
+                        l.len() - 1
+                    }
+                };
+                let x = &mut l[i];
+                if !caminho.as_os_str().is_empty() {
+                    x.nome = caminho.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    x.caminho = caminho.clone();
+                }
+                if x.nome.is_empty() {
+                    x.nome = CefString::from(&d.suggested_file_name()).to_string();
+                }
+                x.recebido = d.received_bytes();
+                x.total = d.total_bytes();
+                x.velocidade = d.current_speed();
+                x.pronto = d.is_complete() != 0;
+                x.cancelado = d.is_canceled() != 0 || d.is_interrupted() != 0;
+                x.cb = if x.pronto || x.cancelado { None } else { callback.map(|c| c.clone()) };
+            });
+            DOWNLOADS_MUDOU.with(|m| m.set(true));
             if d.is_complete() != 0 {
                 let path = CefString::from(&d.full_path()).to_string();
                 let name = std::path::Path::new(&path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(path);
@@ -552,6 +642,19 @@ wrap_request_handler! {
     pub struct Pedidos;
 
     impl RequestHandler {
+        /// Botão do meio ou Ctrl + clique num link: aba nova (por trás, como nos outros
+        /// navegadores), não na mesma.
+        fn on_open_urlfrom_tab(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, target_url: Option<&CefString>, target_disposition: WindowOpenDisposition, _user_gesture: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+            let url = s(target_url);
+            let fundo = target_disposition == WindowOpenDisposition::NEW_BACKGROUND_TAB;
+            let nova = fundo || target_disposition == WindowOpenDisposition::NEW_FOREGROUND_TAB || target_disposition == WindowOpenDisposition::NEW_WINDOW;
+            if nova && !url.is_empty() {
+                NOVAS_ABAS.with(|n| n.borrow_mut().push((url, fundo)));
+                return 1;
+            }
+            0
+        }
+
         fn resource_request_handler(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, _request: Option<&mut Request>, _is_navigation: ::std::os::raw::c_int, _is_download: ::std::os::raw::c_int, _request_initiator: Option<&CefString>, _disable_default_handling: Option<&mut ::std::os::raw::c_int>) -> Option<ResourceRequestHandler> {
             Some(Filtro::new())
         }
@@ -559,11 +662,21 @@ wrap_request_handler! {
 }
 
 wrap_pdf_print_callback! {
-    pub struct Pdf;
+    pub struct Pdf {
+        imprimir: bool,
+    }
 
     impl PdfPrintCallback {
         fn on_pdf_print_finished(&self, path: Option<&CefString>, ok: ::std::os::raw::c_int) {
             let nome = s(path);
+            if self.imprimir {
+                if ok != 0 {
+                    IMPRIMIR.with(|i| *i.borrow_mut() = Some(std::path::PathBuf::from(&nome)));
+                } else {
+                    AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Não foi possível preparar a impressão.").to_string()));
+                }
+                return;
+            }
             let nome = std::path::Path::new(&nome).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(nome);
             AVISOS.with(|a| a.borrow_mut().push(if ok != 0 { glove_config::tr!("PDF salvo em Downloads: {}", nome) } else { glove_config::tr!("Não foi possível salvar o PDF.").to_string() }));
         }
@@ -576,7 +689,16 @@ pub fn salvar_pdf(host: &BrowserHost, titulo: &str) {
     let nome = if nome.trim().is_empty() { "pagina".to_string() } else { nome.trim().chars().take(80).collect() };
     let path = livre(&crate::pasta_downloads().join(format!("{nome}.pdf")));
     let settings = PdfPrintSettings { print_background: 1, ..Default::default() };
-    host.print_to_pdf(Some(&path.to_string_lossy().as_ref().into()), Some(&settings), Some(&mut Pdf::new()));
+    host.print_to_pdf(Some(&path.to_string_lossy().as_ref().into()), Some(&settings), Some(&mut Pdf::new(false)));
+}
+
+/// Imprimir: a página vira um PDF (A4, com os fundos) e a folha Imprimir do Glove o
+/// manda para a impressora (CUPS).
+pub fn imprimir(host: &BrowserHost, pasta: &std::path::Path) {
+    let path = pasta.join("imprimir.pdf");
+    let _ = std::fs::remove_file(&path);
+    let settings = PdfPrintSettings { print_background: 1, ..Default::default() };
+    host.print_to_pdf(Some(&path.to_string_lossy().as_ref().into()), Some(&settings), Some(&mut Pdf::new(true)));
 }
 
 wrap_client! {

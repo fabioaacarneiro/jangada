@@ -272,3 +272,93 @@ msgstr "{} of {}"
 
 msgid "{} encontrados"
 msgstr "{} found"
+
+msgid "Abrir"
+msgstr "Open"
+
+msgid "Abrir em Nova Aba"
+msgstr "Open in New Tab"
+
+msgid "Apagar do Histórico"
+msgstr "Remove from History"
+
+msgid "Arquivo"
+msgstr "File"
+
+msgid "Baixando… {}"
+msgstr "Downloading… {}"
+
+msgid "Busca"
+msgstr "Search"
+
+msgid "Buscar no Histórico"
+msgstr "Search History"
+
+msgid "Cancelado"
+msgstr "Cancelled"
+
+msgid "Cancelar"
+msgstr "Cancel"
+
+msgid "Downloads"
+msgstr "Downloads"
+
+msgid "Editar"
+msgstr "Edit"
+
+msgid "Endereço"
+msgstr "Address"
+
+msgid "Estado"
+msgstr "Status"
+
+msgid "Imprimir…"
+msgstr "Print…"
+
+msgid "Início"
+msgstr "Start Page"
+
+msgid "Limpar a Lista"
+msgstr "Clear List"
+
+msgid "Mostrar Todo o Histórico"
+msgstr "Show All History"
+
+msgid "Mostrar na Pasta"
+msgstr "Show in Folder"
+
+msgid "Mostrar os Downloads"
+msgstr "Show Downloads"
+
+msgid "Nome"
+msgstr "Name"
+
+msgid "Não foi possível preparar a impressão."
+msgstr "Could not prepare the page for printing."
+
+msgid "OK"
+msgstr "OK"
+
+msgid "Preferências…"
+msgstr "Preferences…"
+
+msgid "Pronto"
+msgstr "Done"
+
+msgid "Reabrir a Última Aba Fechada"
+msgstr "Reopen Last Closed Tab"
+
+msgid "Reabrir as Abas da Última Sessão"
+msgstr "Reopen Tabs from Last Session"
+
+msgid "Salvar como PDF"
+msgstr "Save as PDF"
+
+msgid "Tamanho"
+msgstr "Size"
+
+msgid "Título"
+msgstr "Title"
+
+msgid "{} sites"
+msgstr "{} sites"

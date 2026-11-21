@@ -148,6 +148,13 @@ pub fn visitar(titulo: &str, url: &str) {
     gravar_lista("historico.tsv", &v);
 }
 
+/// Tira um site do histórico.
+pub fn apagar_do_historico(url: &str) {
+    let mut v = historico();
+    v.retain(|(_, u)| u != url);
+    gravar_lista("historico.tsv", &v);
+}
+
 pub fn limpar_historico() {
     let _ = std::fs::remove_file(pasta().join("historico.tsv"));
 }
