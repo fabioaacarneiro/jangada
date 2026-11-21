@@ -1,23 +1,22 @@
 [package]
-name = "glove-web"
-# O navegador do Glove: o motor do Chromium (CEF) desenhando a página dentro de uma
-# janela do glove-ui. Fica fora do workspace principal: o CEF é grande (baixado na
-# compilação) e só este programa o usa (pacote glove-web, à parte).
-version = "1.0.0"
+name = "jangada"
+# Jangada, o navegador do Glove OS: o motor do Chromium (CEF) desenhando a página dentro
+# de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
+version = "1.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
-
-[workspace]
+description = "Jangada: o navegador do Glove OS (motor do Chromium, janela do Glove)"
+repository = "https://github.com/fabioaacarneiro/jangada"
 
 [[bin]]
-name = "glove-web"
+name = "jangada"
 path = "src/main.rs"
 
 [dependencies]
 cef = "=156.7.0"
-glove-ui = { path = "../../ui/crates/ui" }
-glove-config = { path = "../../ui/crates/config" }
+glove-ui = { path = "ui/crates/ui" }
+glove-config = { path = "ui/crates/config" }
 
 [profile.release]
 opt-level = 3

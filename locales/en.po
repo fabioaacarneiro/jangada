@@ -1,0 +1,103 @@
+# Traduções da Jangada (o texto de origem é em português).
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "A Jangada não conseguiu chegar a {}. Confira o endereço e a conexão com a internet."
+msgstr "Jangada could not reach {}. Check the address and the internet connection."
+
+msgid "A página {} diz:"
+msgstr "The page {} says:"
+
+msgid "Abrir Endereço…"
+msgstr "Open Location…"
+
+msgid "Abrir Imagem em Nova Aba"
+msgstr "Open Image in New Tab"
+
+msgid "Abrir Link em Nova Aba"
+msgstr "Open Link in New Tab"
+
+msgid "Aumentar"
+msgstr "Bigger"
+
+msgid "Avançar"
+msgstr "Forward"
+
+msgid "Baixado em Downloads: {}"
+msgstr "Downloaded to Downloads: {}"
+
+msgid "Baixando {}…"
+msgstr "Downloading {}…"
+
+msgid "Buscar na web"
+msgstr "Search the web"
+
+msgid "Buscar ou digitar um endereço"
+msgstr "Search or enter an address"
+
+msgid "Buscar “{}”"
+msgstr "Search for “{}”"
+
+msgid "Colar"
+msgstr "Paste"
+
+msgid "Copiar"
+msgstr "Copy"
+
+msgid "Copiar Link"
+msgstr "Copy Link"
+
+msgid "Desfazer"
+msgstr "Undo"
+
+msgid "Diminuir"
+msgstr "Smaller"
+
+msgid "Fechar Aba"
+msgstr "Close Tab"
+
+msgid "Histórico"
+msgstr "History"
+
+msgid "Nova Aba"
+msgstr "New Tab"
+
+msgid "Não foi possível abrir a página"
+msgstr "The page could not be opened"
+
+msgid "O navegador do Glove OS. Motor: Chromium {} (CEF). Leve para computadores modestos: sem o processo da placa de vídeo e sem nada rodando de fundo."
+msgstr "The Glove OS browser. Engine: Chromium {} (CEF). Light for modest computers: no GPU process and nothing running in the background."
+
+msgid "Recarregar"
+msgstr "Reload"
+
+msgid "Recarregar a Página"
+msgstr "Reload Page"
+
+msgid "Recortar"
+msgstr "Cut"
+
+msgid "Refazer"
+msgstr "Redo"
+
+msgid "Selecionar Tudo"
+msgstr "Select All"
+
+msgid "Sobre a Jangada"
+msgstr "About Jangada"
+
+msgid "Tamanho Real"
+msgstr "Actual Size"
+
+msgid "Tentar de Novo"
+msgstr "Try Again"
+
+msgid "Visualizar"
+msgstr "View"
+
+msgid "Voltar"
+msgstr "Revert"
+
+msgid "o navegador do Glove OS"
+msgstr "the Glove OS browser"

@@ -1,10 +1,11 @@
-//! glove-web: o navegador do Glove. O motor é o do Chromium (CEF, o mesmo do Chrome, com
-//! todos os recursos da web de hoje); a janela, as abas e a barra de endereço são do
-//! glove-ui (visual clássico ou moderno, como o resto do Glove). Feito para pesar pouco:
-//! sem o processo da placa de vídeo, poucos processos de página e nada rodando de fundo.
+//! Jangada: o navegador do Glove OS. O motor é o do Chromium (CEF: os recursos da web de
+//! hoje); a janela, as abas, a barra de endereço e as páginas da própria Jangada (início,
+//! erro) são do Glove, no visual clássico ou no moderno. Feita para pesar pouco: sem o
+//! processo da placa de vídeo, poucos processos de página e nada rodando de fundo.
 //!
-//!   glove-web [ENDEREÇO…]   abre os endereços (numa janela que já esteja aberta, se houver)
+//!   jangada [ENDEREÇO…]   abre os endereços (numa janela que já esteja aberta, se houver)
 
+mod inicio;
 mod motor;
 
 use std::io::{Read, Write};
@@ -15,17 +16,17 @@ use std::time::{Duration, Instant};
 use cef::{ImplBrowser, ImplBrowserHost, ImplCommandLine, ImplFrame, ImplJsdialogCallback};
 use glove_config::tr;
 use glove_ui::{
-    paint::{draw::*, icons::Glyph, Color},
-    run, App, Menu, MenuItem, Rect, TabAction, Ui, WindowOptions, SEGMENT_H, SEGMENT_W, TAB_STRIP_H,
+    paint::{draw::*, icons::Glyph, tiny_skia, Color, Fonts},
+    run, App, Cursor, Menu, MenuItem, Rect, TabAction, Ui, WindowOptions, SEGMENT_H, SEGMENT_W, TAB_STRIP_H,
 };
 
 use motor::{Pagina, Shared};
 
-/// A página inicial e a busca (sem rastrear quem busca).
-const INICIO: &str = "https://duckduckgo.com/";
+/// A busca (sem rastrear quem busca).
 const BUSCA: &str = "https://duckduckgo.com/?q=";
+pub const VERSAO: &str = env!("CARGO_PKG_VERSION");
 
-const BARRA_H: f32 = 40.0;
+const BARRA_H: f32 = 44.0;
 const STATUS_H: f32 = 20.0;
 
 pub fn pasta_downloads() -> PathBuf {
@@ -33,14 +34,28 @@ pub fn pasta_downloads() -> PathBuf {
 }
 
 fn socket_path() -> PathBuf {
-    PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| "/tmp".into())).join("glove-web.sock")
+    PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap_or_else(|| "/tmp".into())).join("jangada.sock")
 }
 
-/// O que se digitou na barra: endereço (com ou sem https://) ou busca.
-pub fn endereco(t: &str) -> String {
+/// A pasta dos dados (perfil, cookies, a página inicial). A do glove-web (o nome de
+/// antes) vira a da Jangada.
+fn pasta_dados() -> PathBuf {
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share"));
+    let nova = base.join("jangada");
+    let velha = base.join("glove-web");
+    if !nova.exists() && velha.is_dir() {
+        let _ = std::fs::rename(&velha, &nova);
+    }
+    let _ = std::fs::create_dir_all(&nova);
+    nova
+}
+
+/// O que se digitou na barra: endereço (com ou sem https://) ou busca. Vazio = início.
+pub fn endereco(t: &str, inicio: &str) -> String {
     let t = t.trim();
     if t.is_empty() {
-        return INICIO.to_string();
+        return inicio.to_string();
     }
     if t.contains("://") || t.starts_with("about:") || t.starts_with("data:") {
         return t.to_string();
@@ -56,8 +71,8 @@ pub fn endereco(t: &str) -> String {
     format!("{BUSCA}{q}")
 }
 
-/// O endereço como aparece na barra: sem o https:// do começo e com os acentos de
-/// volta (%C3%A9 → é), se o resultado for texto válido.
+/// O endereço inteiro, sem o https:// do começo e com os acentos de volta
+/// (%C3%A9 → é), se o resultado for texto válido.
 pub fn mostrar(url: &str) -> String {
     let u = url.strip_prefix("https://").unwrap_or(url).trim_end_matches('/');
     let b = u.as_bytes();
@@ -80,18 +95,29 @@ pub fn mostrar(url: &str) -> String {
     String::from_utf8(out).unwrap_or_else(|_| u.to_string())
 }
 
+/// Só o site (como a barra do Safari mostra fora de foco): "pt.wikipedia.org".
+pub fn site(url: &str) -> String {
+    let u = url.split("://").nth(1).unwrap_or(url);
+    let h = u.split(['/', '?', '#']).next().unwrap_or(u);
+    h.strip_prefix("www.").unwrap_or(h).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn barra_de_endereco() {
-        assert_eq!(endereco("wikipedia.org"), "https://wikipedia.org");
-        assert_eq!(endereco("gatos fofos"), "https://duckduckgo.com/?q=gatos+fofos");
-        assert_eq!(endereco("http://a.b/c"), "http://a.b/c");
-        assert_eq!(endereco("/home/x.html"), "file:///home/x.html");
+        let ini = "file:///x/inicio.html";
+        assert_eq!(endereco("wikipedia.org", ini), "https://wikipedia.org");
+        assert_eq!(endereco("gatos fofos", ini), "https://duckduckgo.com/?q=gatos+fofos");
+        assert_eq!(endereco("http://a.b/c", ini), "http://a.b/c");
+        assert_eq!(endereco("/home/x.html", ini), "file:///home/x.html");
+        assert_eq!(endereco("  ", ini), ini);
         assert_eq!(mostrar("https://pt.wikipedia.org/wiki/Dia_Mundial_da_Televis%C3%A3o"), "pt.wikipedia.org/wiki/Dia_Mundial_da_Televisão");
         assert_eq!(mostrar("https://a.b/x%20y/"), "a.b/x%20y");
+        assert_eq!(site("https://www.youtube.com/watch?v=1"), "youtube.com");
+        assert_eq!(site("http://localhost:8080/a"), "localhost:8080");
     }
 }
 
@@ -100,6 +126,8 @@ struct Aba {
     /// A imagem da página pronta para a janela (refeita quando chega imagem nova).
     tela: Option<Canvas>,
     popup: Option<Canvas>,
+    /// O ícone do site, em 16 pontos.
+    icone: Option<Canvas>,
 }
 
 struct Navegador {
@@ -121,6 +149,13 @@ struct Navegador {
     ativo: Instant,
     /// O que o último menu de contexto pegou (o item escolhido chega depois).
     ctx_dados: Option<motor::Contexto>,
+    /// A página inicial (file://…/inicio.html) e se o tema é escuro (páginas próprias).
+    inicio: String,
+    escuro: bool,
+    /// "Sobre a Jangada" aberto.
+    sobre: bool,
+    /// As teclas deste quadro já foram da barra de endereço (não vão para a página).
+    teclas_da_barra: bool,
 }
 
 impl Navegador {
@@ -136,6 +171,10 @@ impl Navegador {
         self.browser().and_then(|b| b.host())
     }
 
+    fn eh_inicio(&self, url: &str) -> bool {
+        url == self.inicio
+    }
+
     fn abrir(&mut self, url: &str) {
         let p: Shared = std::rc::Rc::new(std::cell::RefCell::new(Pagina::new(self.escala)));
         {
@@ -145,10 +184,16 @@ impl Navegador {
             pg.url = url.to_string();
         }
         if motor::nova_aba(&p, url) {
-            self.abas.push(Aba { p, tela: None, popup: None });
+            self.abas.push(Aba { p, tela: None, popup: None, icone: None });
             self.mudar(self.abas.len() - 1);
-            self.barra = mostrar(url);
         }
+    }
+
+    /// Aba nova na página inicial, com o cursor na barra de endereço.
+    fn nova_aba(&mut self) {
+        let i = self.inicio.clone();
+        self.abrir(&i);
+        self.focar_barra = true;
     }
 
     fn mudar(&mut self, i: usize) {
@@ -160,8 +205,6 @@ impl Navegador {
             h.was_hidden(0);
             h.set_focus(1);
         }
-        let url = self.aba().map(|a| a.p.borrow().url.clone()).unwrap_or_default();
-        self.barra = mostrar(&url);
         self.barra_foco = false;
     }
 
@@ -175,32 +218,32 @@ impl Navegador {
             h.close_browser(1);
         }
         if self.abas.is_empty() {
-            self.abrir(INICIO);
+            self.nova_aba();
         } else {
             self.mudar(self.atual.min(self.abas.len() - 1));
         }
     }
 
     fn carregar(&mut self, url: &str) {
-        let url = endereco(url);
+        let url = endereco(url, &self.inicio);
         if let Some(f) = self.browser().and_then(|b| b.main_frame()) {
             f.load_url(Some(&url.as_str().into()));
         }
         if let Some(a) = self.aba() {
             a.p.borrow_mut().url = url.clone();
         }
-        self.barra = mostrar(&url);
         if let Some(h) = self.host() {
             h.set_focus(1);
         }
     }
 
-    /// Atalhos do navegador (do teclado ou dos menus). Devolve se tratou.
-    fn atalho(&mut self, combo: &str) -> bool {
+    /// Atalhos da Jangada (do teclado ou dos menus). `pagina`: o foco está na página
+    /// (copiar, colar etc. vão para ela). Devolve se tratou.
+    fn atalho(&mut self, combo: &str, pagina: bool) -> bool {
         let b = self.browser();
         let frame = || b.as_ref().and_then(|b| b.focused_frame().or_else(|| b.main_frame()));
         match combo {
-            "Ctrl+T" => self.abrir(INICIO),
+            "Ctrl+T" => self.nova_aba(),
             "Ctrl+W" => self.fechar(self.atual),
             "Ctrl+L" | "F6" => self.focar_barra = true,
             "Ctrl+R" | "F5" => {
@@ -223,6 +266,10 @@ impl Navegador {
                     b.go_forward();
                 }
             }
+            "Alt+Home" => {
+                let i = self.inicio.clone();
+                self.carregar(&i);
+            }
             "Ctrl+Tab" if !self.abas.is_empty() => self.mudar((self.atual + 1) % self.abas.len()),
             "Ctrl+Shift+Tab" if !self.abas.is_empty() => self.mudar((self.atual + self.abas.len() - 1) % self.abas.len()),
             "Ctrl+=" | "Ctrl++" | "Ctrl+Shift+=" | "Ctrl+plus" | "Ctrl+equal" => self.zoom(0.5),
@@ -232,12 +279,12 @@ impl Navegador {
                     h.set_zoom_level(0.0);
                 }
             }
-            "Ctrl+C" => frame().map(|f| f.copy()).unwrap_or(()),
-            "Ctrl+X" => frame().map(|f| f.cut()).unwrap_or(()),
-            "Ctrl+V" => frame().map(|f| f.paste()).unwrap_or(()),
-            "Ctrl+A" => frame().map(|f| f.select_all()).unwrap_or(()),
-            "Ctrl+Z" => frame().map(|f| f.undo()).unwrap_or(()),
-            "Ctrl+Shift+Z" | "Ctrl+Y" => frame().map(|f| f.redo()).unwrap_or(()),
+            "Ctrl+C" if pagina => frame().map(|f| f.copy()).unwrap_or(()),
+            "Ctrl+X" if pagina => frame().map(|f| f.cut()).unwrap_or(()),
+            "Ctrl+V" if pagina => frame().map(|f| f.paste()).unwrap_or(()),
+            "Ctrl+A" if pagina => frame().map(|f| f.select_all()).unwrap_or(()),
+            "Ctrl+Z" if pagina => frame().map(|f| f.undo()).unwrap_or(()),
+            "Ctrl+Shift+Z" | "Ctrl+Y" if pagina => frame().map(|f| f.redo()).unwrap_or(()),
             _ => return false,
         }
         true
@@ -249,7 +296,7 @@ impl Navegador {
         }
     }
 
-    /// Endereços vindos de outra chamada do glove-web (o segundo abre aqui).
+    /// Endereços vindos de outra chamada da Jangada (a segunda abre aqui).
     fn ler_servidor(&mut self) {
         let mut novos = Vec::new();
         if let Some(l) = &self.servidor {
@@ -261,11 +308,17 @@ impl Navegador {
             }
         }
         for u in novos {
-            self.abrir(if u.trim().is_empty() { INICIO } else { &u });
+            if u.trim().is_empty() {
+                self.nova_aba();
+            } else {
+                self.abrir(&u);
+            }
         }
     }
 
-    /// A barra de cima: voltar/avançar, recarregar, o endereço e a aba nova.
+    /// A barra de cima, como a do Safari: voltar/avançar e início à esquerda, o endereço
+    /// no meio (fora de foco só o site, com o cadeado; recarregar/parar dentro dele) e a
+    /// aba nova à direita.
     fn barra(&mut self, ui: &mut Ui) {
         let w = ui.c.w;
         let modern = ui.theme.modern;
@@ -274,66 +327,102 @@ impl Navegador {
         } else {
             ui.c.fill_rect(0.0, 0.0, w, BARRA_H, &vgrad(0.0, BARRA_H, &[(0.0, rgba(236, 236, 236, 255)), (1.0, rgba(212, 212, 216, 255))]));
         }
-        ui.c.hline(0.0, BARRA_H - 1.0, w, rgba(150, 150, 156, 255));
+        ui.c.hline(0.0, BARRA_H - 1.0, w, rgba(160, 160, 166, 255));
         let cy = (BARRA_H - SEGMENT_H) / 2.0;
-        let (back, fwd, loading) = self.aba().map(|a| {
+        let (back, fwd, loading, url) = self.aba().map(|a| {
             let p = a.p.borrow();
-            (p.back, p.forward, p.loading)
+            (p.back, p.forward, p.loading, p.url.clone())
         }).unwrap_or_default();
         match ui.segmented_in(Rect::new(10.0, cy, 2.0 * SEGMENT_W, SEGMENT_H), &[Glyph::Back, Glyph::Forward], None, &[back, fwd]) {
             Some(0) => {
-                self.atalho("Alt+Left");
+                self.atalho("Alt+Left", false);
             }
             Some(_) => {
-                self.atalho("Alt+Right");
+                self.atalho("Alt+Right", false);
             }
             None => {}
         }
-        // Recarregar (ou parar, carregando).
-        let rx = 10.0 + 2.0 * SEGMENT_W + 8.0;
-        let glyph = if loading { Glyph::Minus } else { Glyph::RotateRight };
-        if ui.segmented_in(Rect::new(rx, cy, SEGMENT_W, SEGMENT_H), &[glyph], None, &[]).is_some() {
-            if let Some(b) = self.browser() {
-                if loading { b.stop_load() } else { b.reload() }
-            }
+        let hx = 10.0 + 2.0 * SEGMENT_W + 8.0;
+        if ui.segmented_in(Rect::new(hx, cy, SEGMENT_W, SEGMENT_H), &[Glyph::Home], None, &[]).is_some() {
+            self.atalho("Alt+Home", false);
         }
         // Aba nova, à direita.
         let nx = w - 10.0 - SEGMENT_W;
         if ui.segmented_in(Rect::new(nx, cy, SEGMENT_W, SEGMENT_H), &[Glyph::Plus], None, &[]).is_some() {
-            self.abrir(INICIO);
-            self.focar_barra = true;
+            self.nova_aba();
         }
-        // O endereço no meio.
-        let fx = rx + SEGMENT_W + 12.0;
-        let fr = Rect::new(fx, (BARRA_H - 24.0) / 2.0, (nx - 12.0 - fx).max(80.0), 24.0);
+        // O endereço no meio (no máximo 640 pontos, centrado como no Safari).
+        let livre = (hx + SEGMENT_W + 16.0, nx - 16.0);
+        let fw = (livre.1 - livre.0).clamp(120.0, 640.0);
+        let fx = ((w - fw) / 2.0).max(livre.0).min(livre.1 - fw);
+        let fr = Rect::new(fx, (BARRA_H - 26.0) / 2.0, fw, 26.0);
         let autofocus = std::mem::take(&mut self.focar_barra);
         if autofocus {
             if let Some(h) = self.host() {
                 h.set_focus(0);
             }
-            // Ctrl+L: o campo começa vazio (digitar já troca o endereço); Esc devolve.
+            // O campo começa vazio: digitar já troca o endereço; Esc devolve.
             self.barra.clear();
         }
-        let (_, enter) = ui.text_field_in(fr, &mut self.barra, autofocus);
-        self.barra_foco = ui.has_focus();
-        if self.barra_foco && ui.keys().iter().any(|k| k.key == glove_ui::ui::Key::Escape) {
-            let url = self.aba().map(|a| a.p.borrow().url.clone()).unwrap_or_default();
-            self.barra = mostrar(&url);
-            if let Some(h) = self.host() {
-                h.set_focus(1);
+        if self.barra_foco || autofocus {
+            let (_, enter) = ui.text_field_in(fr, &mut self.barra, autofocus);
+            self.barra_foco = ui.has_focus();
+            if self.barra.is_empty() {
+                let dica = tr!("Buscar ou digitar um endereço");
+                ui.fonts.draw(ui.c, dica, fr.x + 8.0, fr.y + 17.5, 12.5, false, rgba(150, 150, 156, 255));
+            }
+            if self.barra_foco && ui.keys().iter().any(|k| k.key == glove_ui::ui::Key::Escape) {
+                self.barra_foco = false;
+                if let Some(h) = self.host() {
+                    h.set_focus(1);
+                }
+            }
+            if enter || self.barra_foco {
+                self.teclas_da_barra = true;
+            }
+            if enter {
+                let t = self.barra.clone();
+                self.carregar(&t);
+                self.barra_foco = false;
+            }
+        } else {
+            // Fora de foco: uma pílula com o site no meio (e o cadeado), como no Safari.
+            let hit = ui.hit(fr);
+            let fill = if modern { if ui.theme.dark { rgba(58, 58, 62, 255) } else { rgba(255, 255, 255, 255) } } else { Color::WHITE };
+            ui.c.fill(rrect(fr.x, fr.y, fr.w, fr.h, 7.0), &solid(fill));
+            ui.c.stroke(rrect(fr.x + 0.5, fr.y + 0.5, fr.w - 1.0, fr.h - 1.0, 7.0), &solid(rgba(190, 190, 196, 255)), 1.0);
+            let vazio = self.eh_inicio(&url) || url.is_empty();
+            let texto = if vazio { tr!("Buscar ou digitar um endereço").to_string() } else { site(&mostrar(&url)) };
+            let t = ui.fonts.ellipsize(&texto, 12.5, false, fr.w - 70.0);
+            let tw = ui.fonts.measure(&t, 12.5, false);
+            let seguro = url.starts_with("https://");
+            let lock_w = if seguro && !vazio { 14.0 } else { 0.0 };
+            let tx = fr.x + (fr.w - tw - lock_w) / 2.0 + lock_w;
+            if lock_w > 0.0 {
+                cadeado(ui.c, tx - 13.0, fr.y + 8.0, rgba(110, 110, 116, 255));
+            }
+            ui.fonts.draw(ui.c, &t, tx, fr.y + 17.5, 12.5, false, if vazio { rgba(150, 150, 156, 255) } else { rgba(30, 30, 34, 255) });
+            if hit.clicked {
+                self.focar_barra = true;
+                ui.redraw = true;
+            }
+            if hit.hover {
+                ui.set_cursor(Cursor::Text);
             }
         }
-        // Fora de foco, a barra mostra o endereço da página (que muda ao seguir links).
-        if !self.barra_foco && !enter {
-            let url = self.aba().map(|a| a.p.borrow().url.clone()).unwrap_or_default();
-            if !url.is_empty() {
-                self.barra = mostrar(&url);
+        // Recarregar (ou parar, carregando), dentro do campo, à direita.
+        let rr = Rect::new(fr.x + fr.w - 24.0, fr.y + 3.0, 20.0, 20.0);
+        if !self.barra_foco {
+            let h = ui.hit(rr);
+            if h.hover {
+                ui.c.fill(rrect(rr.x, rr.y, rr.w, rr.h, 5.0), &solid(rgba(0, 0, 0, 20)));
             }
-        }
-        if enter {
-            let t = self.barra.clone();
-            self.carregar(&t);
-            self.barra_foco = false;
+            glove_ui::paint::icons::glyph(ui.c, if loading { Glyph::Stop } else { Glyph::RotateRight }, rr.x + 10.0, rr.y + 10.0, 11.0, rgba(90, 90, 96, 255));
+            if h.clicked {
+                if let Some(b) = self.browser() {
+                    if loading { b.stop_load() } else { b.reload() }
+                }
+            }
         }
         // Carregando: uma faixa fina embaixo da barra.
         if loading {
@@ -346,27 +435,32 @@ impl Navegador {
     /// Copia a imagem nova da página (se houver) para os canvas da aba.
     fn atualizar_tela(&mut self) {
         let escala = self.escala;
-        let Some(a) = self.abas.get_mut(self.atual) else { return };
-        let mut p = a.p.borrow_mut();
-        if !p.dirty {
-            return;
-        }
-        p.dirty = false;
-        if p.fw > 0 && p.fh > 0 && p.frame.len() == (p.fw * p.fh * 4) as usize {
-            let need = (p.fw as f32 / escala, p.fh as f32 / escala);
-            let ok = a.tela.as_ref().is_some_and(|c| c.px_width() == p.fw as u32 && c.px_height() == p.fh as u32);
-            if !ok {
-                a.tela = Canvas::new(need.0, need.1, escala).filter(|c| c.px_width() == p.fw as u32 && c.px_height() == p.fh as u32);
+        for (k, a) in self.abas.iter_mut().enumerate() {
+            let mut p = a.p.borrow_mut();
+            // O ícone do site (qualquer aba): refeito em 16 pontos.
+            if std::mem::take(&mut p.favicon_novo) {
+                a.icone = p.favicon.as_ref().and_then(|(d, w, h)| icone_16(d, *w, *h, escala));
             }
-            if let Some(c) = &mut a.tela {
-                c.pixels_mut().copy_from_slice(&p.frame);
+            if k != self.atual || !p.dirty {
+                continue;
             }
-        }
-        a.popup = None;
-        if p.popup.is_some() && p.pw > 0 && p.ph > 0 && p.popup_frame.len() == (p.pw * p.ph * 4) as usize {
-            if let Some(mut c) = Canvas::new(p.pw as f32 / escala, p.ph as f32 / escala, escala).filter(|c| c.px_width() == p.pw as u32 && c.px_height() == p.ph as u32) {
-                c.pixels_mut().copy_from_slice(&p.popup_frame);
-                a.popup = Some(c);
+            p.dirty = false;
+            if p.fw > 0 && p.fh > 0 && p.frame.len() == (p.fw * p.fh * 4) as usize {
+                let need = (p.fw as f32 / escala, p.fh as f32 / escala);
+                let ok = a.tela.as_ref().is_some_and(|c| c.px_width() == p.fw as u32 && c.px_height() == p.fh as u32);
+                if !ok {
+                    a.tela = Canvas::new(need.0, need.1, escala).filter(|c| c.px_width() == p.fw as u32 && c.px_height() == p.fh as u32);
+                }
+                if let Some(c) = &mut a.tela {
+                    c.pixels_mut().copy_from_slice(&p.frame);
+                }
+            }
+            a.popup = None;
+            if p.popup.is_some() && p.pw > 0 && p.ph > 0 && p.popup_frame.len() == (p.pw * p.ph * 4) as usize {
+                if let Some(mut c) = Canvas::new(p.pw as f32 / escala, p.ph as f32 / escala, escala).filter(|c| c.px_width() == p.pw as u32 && c.px_height() == p.ph as u32) {
+                    c.pixels_mut().copy_from_slice(&p.popup_frame);
+                    a.popup = Some(c);
+                }
             }
         }
     }
@@ -379,6 +473,11 @@ impl Navegador {
         let flags = (if mods.shift { 1 << 1 } else { 0 }) | (if mods.ctrl { 1 << 2 } else { 0 }) | (if mods.alt { 1 << 3 } else { 0 }) | (if ui.mouse_down() { 1 << 4 } else { 0 });
         let ev = cef::MouseEvent { x: (px - area.x).round() as i32, y: (py - area.y).round() as i32, modifiers: flags };
         let inside = ui.pointer_inside() && area.contains((px, py));
+        if inside {
+            // O cursor que a página pediu (mãozinha nos links, barra nos textos).
+            let c = self.aba().map(|a| a.p.borrow().cursor).unwrap_or_default();
+            ui.set_cursor(c);
+        }
         if inside || self.apertado {
             if ui.moved() {
                 h.send_mouse_move_event(Some(&ev), 0);
@@ -391,6 +490,7 @@ impl Navegador {
         }
         if inside && ui.mouse_pressed() {
             h.set_focus(1);
+            self.barra_foco = false;
             self.apertado = true;
             h.send_mouse_click_event(Some(&ev), cef::MouseButtonType::LEFT, 0, ui.click_count().max(1) as i32);
             self.ativo = Instant::now();
@@ -410,15 +510,20 @@ impl Navegador {
             h.send_mouse_wheel_event(Some(&ev), 0, (-sc * 4.0).round() as i32);
             self.ativo = Instant::now();
         }
-        // Teclado: só com a barra de endereço fora de foco.
-        if self.barra_foco {
+        // Teclado: com a barra de endereço em foco, só os atalhos da Jangada.
+        let keys = ui.keys().to_vec();
+        if self.barra_foco || std::mem::take(&mut self.teclas_da_barra) {
+            for k in keys {
+                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5") {
+                    self.atalho(&k.combo, false);
+                }
+            }
             return;
         }
-        let keys = ui.keys().to_vec();
         let mut handled_text = false;
         for k in keys {
             use glove_ui::ui::Key;
-            if self.atalho(&k.combo) {
+            if self.atalho(&k.combo, true) {
                 handled_text = true;
                 continue;
             }
@@ -501,9 +606,7 @@ impl Navegador {
         self.ctx_dados = Some(c.clone());
         ui.context_menu((area.x + c.x as f32, area.y + c.y as f32), &itens);
     }
-}
 
-impl Navegador {
     fn acao_contexto(&mut self, id: &str) {
         let Some(c) = self.ctx_dados.clone() else { return };
         let b = self.browser();
@@ -516,22 +619,55 @@ impl Navegador {
             "ctx-copiar" => frame().map(|f| f.copy()).unwrap_or(()),
             "ctx-colar" => frame().map(|f| f.paste()).unwrap_or(()),
             "ctx-buscar" => {
-                let u = endereco(&c.selection);
-                let u = if u.starts_with(BUSCA) { u } else { format!("{BUSCA}{}", c.selection.replace(' ', "+")) };
-                self.abrir(&u);
+                let q: String = c.selection.replace(' ', "+");
+                self.abrir(&format!("{BUSCA}{q}"));
             }
             "ctx-voltar" => {
-                self.atalho("Alt+Left");
+                self.atalho("Alt+Left", false);
             }
             "ctx-avancar" => {
-                self.atalho("Alt+Right");
+                self.atalho("Alt+Right", false);
             }
             "ctx-recarregar" => {
-                self.atalho("Ctrl+R");
+                self.atalho("Ctrl+R", false);
             }
             _ => {}
         }
     }
+
+    /// Um site não abriu: a página de erro da Jangada no lugar da do motor.
+    fn pagina_de_erro(&mut self, fonts: &Fonts) {
+        let escuro = self.escuro;
+        for a in &self.abas {
+            let pedido = a.p.borrow_mut().erro_pedido.take();
+            let Some((url, codigo)) = pedido else { continue };
+            if url.starts_with("data:") || url.is_empty() {
+                continue;
+            }
+            let dado = inicio::pagina_erro(fonts, escuro, &url, &codigo);
+            a.p.borrow_mut().erro_url = Some(url);
+            let b = a.p.borrow().browser.clone();
+            if let Some(f) = b.and_then(|b| b.main_frame()) {
+                f.load_url(Some(&dado.as_str().into()));
+            }
+        }
+    }
+}
+
+/// Cadeado pequeno (site seguro), 9 × 10 pontos com o canto em (x, y).
+fn cadeado(c: &mut Canvas, x: f32, y: f32, cor: Color) {
+    c.stroke(rrect(x + 1.8, y, 5.4, 6.0, 2.7), &solid(cor), 1.3);
+    c.fill(rrect(x, y + 4.2, 9.0, 6.0, 1.5), &solid(cor));
+}
+
+/// O ícone do site num canvas de 16 pontos (o motor manda no tamanho que tiver).
+fn icone_16(data: &[u8], w: i32, h: i32, escala: f32) -> Option<Canvas> {
+    let src = tiny_skia::PixmapRef::from_bytes(data, w as u32, h as u32)?;
+    let mut c = Canvas::new(16.0, 16.0, escala)?;
+    let px = c.px_width() as f32;
+    let paint = tiny_skia::PixmapPaint { quality: tiny_skia::FilterQuality::Bicubic, ..Default::default() };
+    c.draw_pixmap_t(src, &paint, tiny_skia::Transform::from_scale(px / w as f32, px / h as f32));
+    Some(c)
 }
 
 /// Texto para a área de transferência (pelo wl-copy, se houver).
@@ -581,6 +717,7 @@ impl App for Navegador {
 
     fn menus(&self) -> Vec<Menu> {
         vec![
+            Menu::app(vec![MenuItem::new("sobre", tr!("Sobre a Jangada"), "")]),
             Menu::new(tr!("Arquivo"), vec![
                 MenuItem::new("nova-aba", tr!("Nova Aba"), "Ctrl+T"),
                 MenuItem::new("abrir-local", tr!("Abrir Endereço…"), "Ctrl+L"),
@@ -607,37 +744,46 @@ impl App for Navegador {
                 MenuItem::new("voltar", tr!("Voltar"), "Alt+Left"),
                 MenuItem::new("avancar", tr!("Avançar"), "Alt+Right"),
                 MenuItem::Separator,
-                MenuItem::new("inicio", tr!("Início"), ""),
+                MenuItem::new("inicio", tr!("Início"), "Alt+Home"),
             ]),
         ]
     }
 
     fn ui(&mut self, ui: &mut Ui) {
         self.escala = ui.c.scale;
+        self.escuro = ui.theme.dark;
+        self.teclas_da_barra = false;
         for a in ui.menu_actions().to_vec() {
             match a.as_str() {
-                "inicio" => self.carregar(INICIO),
+                "sobre" => self.sobre = true,
                 id if id.starts_with("ctx-") => self.acao_contexto(id),
                 _ => {}
             }
         }
+        self.pagina_de_erro(ui.fonts);
         let (w, h) = (ui.c.w, ui.c.h);
         ui.c.fill_rect(0.0, 0.0, w, h, &solid(Color::WHITE));
         self.barra(ui);
-        // Abas (só com mais de uma, como no Safari).
+        // Abas (só com mais de uma, como no Safari), com o ícone de cada site.
         let mut top = BARRA_H;
+        self.atualizar_tela();
         if self.abas.len() > 1 {
             let titulos: Vec<String> = self.abas.iter().map(|a| {
                 let p = a.p.borrow();
-                if p.title.is_empty() { mostrar(&p.url) } else { p.title.clone() }
+                if !p.title.is_empty() {
+                    p.title.clone()
+                } else if self.eh_inicio(&p.url) {
+                    tr!("Início").to_string()
+                } else {
+                    site(&mostrar(&p.url))
+                }
             }).collect();
-            match ui.tab_strip(Rect::new(0.0, top, w, TAB_STRIP_H), &titulos, self.atual) {
+            let icones: Vec<Option<&Canvas>> = self.abas.iter().map(|a| a.icone.as_ref()).collect();
+            let acao = ui.tab_strip_with_icons(Rect::new(0.0, top, w, TAB_STRIP_H), &titulos, &icones, self.atual);
+            match acao {
                 Some(TabAction::Select(i)) => self.mudar(i),
                 Some(TabAction::Close(i)) => self.fechar(i),
-                Some(TabAction::New) => {
-                    self.abrir(INICIO);
-                    self.focar_barra = true;
-                }
+                Some(TabAction::New) => self.nova_aba(),
                 None => {}
             }
             top += TAB_STRIP_H;
@@ -664,7 +810,6 @@ impl App for Navegador {
             }
         }
         self.area = area;
-        self.atualizar_tela();
         if let Some(a) = self.aba() {
             if let Some(c) = &a.tela {
                 ui.c.draw_canvas(c, area.x, area.y);
@@ -676,7 +821,7 @@ impl App for Navegador {
         }
         // O link sob o mouse (ou um aviso), num balãozinho no canto de baixo.
         if let Some(t) = status {
-            let t = ui.fonts.ellipsize(&t, 11.0, false, w * 0.6);
+            let t = ui.fonts.ellipsize(&mostrar(&t), 11.0, false, w * 0.6);
             let tw = ui.fonts.measure(&t, 11.0, false) + 14.0;
             let y = h - STATUS_H;
             ui.c.fill(rrect4(0.0, y, tw, STATUS_H, [0.0, 5.0, 0.0, 0.0]), &solid(rgba(240, 240, 242, 245)));
@@ -685,27 +830,57 @@ impl App for Navegador {
         }
         // O título da janela segue a página.
         let titulo = self.aba().map(|a| a.p.borrow().title.clone()).unwrap_or_default();
-        ui.set_title(if titulo.is_empty() { tr!("Navegador") } else { &titulo });
+        ui.set_title(if titulo.is_empty() { "Jangada" } else { &titulo });
         // alert()/confirm() da página: alerta do Glove (janela própria).
         let dialog = self.aba().and_then(|a| a.p.borrow().dialog.clone());
         if let Some((confirm, msg, cb)) = dialog {
             let botoes: Vec<&str> = if confirm { vec![tr!("Cancelar"), tr!("OK")] } else { vec![tr!("OK")] };
-            let url = self.aba().map(|a| mostrar(&a.p.borrow().url)).unwrap_or_default();
-            if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &tr!("A página {} diz:", url.split('/').next().unwrap_or("")), &msg, &botoes) {
+            let url = self.aba().map(|a| site(&a.p.borrow().url)).unwrap_or_default();
+            if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &tr!("A página {} diz:", url), &msg, &botoes) {
                 cb.cont(if confirm { (i == 1) as i32 } else { 1 }, None);
                 if let Some(a) = self.aba() {
                     a.p.borrow_mut().dialog = None;
                 }
             }
+        } else if self.sobre {
+            let texto = tr!("O navegador do Glove OS. Motor: Chromium {} (CEF). Leve para computadores modestos: sem o processo da placa de vídeo e sem nada rodando de fundo.", cef::sys::CHROME_VERSION_MAJOR);
+            if ui.alert(glove_ui::AlertKind::Note, &format!("Jangada {VERSAO}"), &texto, &[tr!("OK")]).is_some() {
+                self.sobre = false;
+            }
         }
-        if !self.barra_foco || ui.mouse_pressed() {
-            self.entrada(ui, area);
-        }
+        // O mouse vai sempre para a página (passar sobre ela, a mãozinha nos links); o
+        // teclado só quando a barra de endereço não está em foco (ver `entrada`).
+        self.entrada(ui, area);
         self.menu_contexto(ui, area);
     }
 }
 
+/// `jangada --icones PASTA`: o ícone da Jangada em PNG nos tamanhos do tema hicolor (para
+/// o pacote: menus e lançadores de fora do Glove usam esses arquivos).
+fn gerar_icones(dir: &std::path::Path) -> std::process::ExitCode {
+    let Some(fonts) = Fonts::load_system() else { return 1.into() };
+    for px in [16u32, 22, 24, 32, 48, 64, 128, 256] {
+        let Some(mut c) = Canvas::new(px as f32, px as f32, 1.0) else { continue };
+        glove_ui::paint::icons::draw_bare(&mut c, &fonts, glove_ui::paint::icons::Icon::Jangada, 0.0, 0.0, px as f32, None);
+        let d = dir.join(format!("{px}x{px}/apps"));
+        let _ = std::fs::create_dir_all(&d);
+        let ok = tiny_skia::IntSize::from_wh(c.px_width(), c.px_height())
+            .and_then(|s| tiny_skia::Pixmap::from_vec(c.data().to_vec(), s))
+            .and_then(|p| p.encode_png().ok())
+            .is_some_and(|png| std::fs::write(d.join("jangada.png"), png).is_ok());
+        if !ok {
+            return 1.into();
+        }
+    }
+    0.into()
+}
+
 fn main() -> std::process::ExitCode {
+    if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
+        if a == "--icones" {
+            return gerar_icones(std::path::Path::new(&dir));
+        }
+    }
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = cef::args::Args::new();
     let Some(cmd) = args.as_cmd_line() else { return 1.into() };
@@ -716,9 +891,16 @@ fn main() -> std::process::ExitCode {
         // Processo da página, da rede etc.: o motor já fez o trabalho dele.
         return (ret.max(0) as u8).into();
     }
+    let dados = pasta_dados();
+    // A página inicial (refeita a cada abertura: segue o tema e o idioma).
+    let escuro = glove_config::Config::load().theme.contains("escuro");
+    let inicio_url = match Fonts::load_system() {
+        Some(f) => format!("file://{}", inicio::pagina_inicial(&dados, &f, escuro).display()),
+        None => "https://duckduckgo.com/".to_string(),
+    };
     // Endereços pedidos (o resto da linha de comando que não é opção).
-    let urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("--")).map(|a| endereco(&a)).collect();
-    // Já aberto: manda os endereços para ele e sai.
+    let urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("--")).map(|a| endereco(&a, &inicio_url)).collect();
+    // Já aberta: manda os endereços para ela e sai.
     let sock = socket_path();
     if let Ok(mut c) = UnixStream::connect(&sock) {
         let text = if urls.is_empty() { "\n".to_string() } else { urls.join("\n") };
@@ -730,48 +912,56 @@ fn main() -> std::process::ExitCode {
         let _ = l.set_nonblocking(true);
     });
 
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let dados = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("glove-web");
-    let _ = std::fs::create_dir_all(&dados);
     let perfil = dados.join("Perfil");
     let idioma = if glove_config::idioma().starts_with("en") { "en-US" } else { "pt-BR" };
+    // Os sites veem a Jangada como um Chrome (para funcionarem igual) com o nome dela no fim.
+    let produto = format!("Chrome/{}.0.0.0 Jangada/{VERSAO}", cef::sys::CHROME_VERSION_MAJOR);
     let settings = cef::Settings {
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
-        no_sandbox: (std::env::var_os("GLOVE_WEB_SEM_SANDBOX").is_some()) as i32,
+        no_sandbox: (std::env::var_os("JANGADA_SEM_SANDBOX").is_some()) as i32,
         root_cache_path: dados.to_string_lossy().as_ref().into(),
         cache_path: perfil.to_string_lossy().as_ref().into(),
         persist_session_cookies: 1,
         locale: idioma.into(),
         accept_language_list: if idioma == "pt-BR" { "pt-BR,pt,en-US,en".into() } else { "en-US,en".into() },
+        user_agent_product: produto.as_str().into(),
         log_severity: cef::LogSeverity::ERROR,
         background_color: 0xffff_ffff,
         ..Default::default()
     };
-    let dbg = std::env::var_os("GLOVE_WEB_DEBUG").is_some();
-    if dbg {
-        eprintln!("glove-web: iniciando o motor");
-    }
     if cef::initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()) != 1 {
-        eprintln!("glove-web: o motor do Chromium não iniciou");
+        eprintln!("jangada: o motor do Chromium não iniciou");
         return 1.into();
     }
-    let mut nav = Navegador { abas: Vec::new(), atual: 0, barra: String::new(), barra_foco: false, focar_barra: false, area: Rect::new(0.0, BARRA_H, 1100.0, 700.0), escala: 1.0, dentro: false, apertado: false, aviso: None, servidor, ativo: Instant::now(), ctx_dados: None };
+    let mut nav = Navegador {
+        abas: Vec::new(),
+        atual: 0,
+        barra: String::new(),
+        barra_foco: false,
+        focar_barra: false,
+        area: Rect::new(0.0, BARRA_H, 1100.0, 700.0),
+        escala: 1.0,
+        dentro: false,
+        apertado: false,
+        aviso: None,
+        servidor,
+        ativo: Instant::now(),
+        ctx_dados: None,
+        inicio: inicio_url,
+        escuro,
+        sobre: false,
+        teclas_da_barra: false,
+    };
     if urls.is_empty() {
-        nav.abrir(INICIO);
+        nav.nova_aba();
     } else {
         for u in &urls {
             nav.abrir(u);
         }
     }
-    let opts = WindowOptions { title: tr!("Navegador").into(), app_id: "glove.Navegador".into(), size: (1100, 760), fixed: false, min_size: Some((520, 360)) };
-    if dbg {
-        eprintln!("glove-web: motor pronto, abrindo a janela");
-    }
+    let opts = WindowOptions { title: "Jangada".into(), app_id: "glove.Navegador".into(), size: (1100, 760), fixed: false, min_size: Some((560, 380)) };
     let r = run(opts, nav);
-    if dbg {
-        eprintln!("glove-web: janela fechada: {:?}", r.as_ref().err());
-    }
     // Fecha o motor com calma (as abas já pediram para fechar).
     let t = Instant::now();
     while t.elapsed() < Duration::from_millis(300) {

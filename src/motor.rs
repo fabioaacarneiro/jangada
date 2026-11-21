@@ -39,11 +39,22 @@ pub struct Pagina {
     pub tooltip: String,
     /// Endereço do link sob o mouse (mostrado embaixo, como nos navegadores).
     pub status: String,
+    /// O cursor que a página pede (mãozinha nos links, barra nos textos).
+    pub cursor: glove_ui::Cursor,
+    /// O ícone do site (RGBA pré-multiplicado, largura, altura) e de onde veio.
+    pub favicon: Option<(Vec<u8>, i32, i32)>,
+    pub favicon_url: String,
+    /// O ícone mudou (o app refaz a imagem dele).
+    pub favicon_novo: bool,
+    /// Um site não abriu: (endereço, código do erro) para o app mostrar a página de erro
+    /// da Jangada; e o endereço que falhou enquanto ela está à vista.
+    pub erro_pedido: Option<(String, String)>,
+    pub erro_url: Option<String>,
 }
 
 impl Pagina {
     pub fn new(scale: f32) -> Self {
-        Self { w: 800, h: 600, scale, frame: Vec::new(), fw: 0, fh: 0, popup: None, popup_frame: Vec::new(), pw: 0, ph: 0, dirty: true, title: String::new(), url: String::new(), loading: true, back: false, forward: false, browser: None, ctx: None, dialog: None, tooltip: String::new(), status: String::new() }
+        Self { w: 800, h: 600, scale, frame: Vec::new(), fw: 0, fh: 0, popup: None, popup_frame: Vec::new(), pw: 0, ph: 0, dirty: true, title: String::new(), url: String::new(), loading: true, back: false, forward: false, browser: None, ctx: None, dialog: None, tooltip: String::new(), status: String::new(), cursor: glove_ui::Cursor::Arrow, favicon: None, favicon_url: String::new(), favicon_novo: false, erro_pedido: None, erro_url: None }
     }
 }
 
@@ -103,7 +114,7 @@ wrap_app! {
             // Leve para máquinas fracas: sem o processo da placa de vídeo (a página é
             // desenhada pelo processador e copiada para a janela); poucos processos de
             // página; sem o cache de voltar (páginas inteiras guardadas na memória).
-            if std::env::var_os("GLOVE_WEB_GPU").is_none() {
+            if std::env::var_os("JANGADA_GPU").is_none() {
                 sw(cl, "disable-gpu");
                 sw(cl, "disable-gpu-compositing");
             }
@@ -216,7 +227,14 @@ wrap_display_handler! {
         fn on_address_change(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
             if frame.is_some_and(|f| f.is_main() != 0) {
                 if let Ok(mut p) = self.p.try_borrow_mut() {
-                    p.url = s(url);
+                    let u = s(url);
+                    // A página de erro da Jangada fica com o endereço que falhou.
+                    if u.starts_with("data:text/html") && p.erro_url.is_some() {
+                        p.url = p.erro_url.clone().unwrap_or_default();
+                    } else {
+                        p.erro_url = None;
+                        p.url = u;
+                    }
                     p.dirty = true;
                 }
             }
@@ -237,9 +255,91 @@ wrap_display_handler! {
             1
         }
 
+        fn on_cursor_change(&self, _browser: Option<&mut Browser>, _cursor: ::std::os::raw::c_ulong, type_: CursorType, _custom_cursor_info: Option<&CursorInfo>) -> ::std::os::raw::c_int {
+            let c = if type_ == CursorType::HAND {
+                glove_ui::Cursor::Hand
+            } else if type_ == CursorType::IBEAM {
+                glove_ui::Cursor::Text
+            } else {
+                glove_ui::Cursor::Arrow
+            };
+            if let Ok(mut p) = self.p.try_borrow_mut() {
+                if p.cursor != c {
+                    p.cursor = c;
+                    p.dirty = true;
+                }
+            }
+            1
+        }
+
+        /// O site disse onde está o ícone dele: baixa (no tamanho da aba).
+        fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
+            let Some(url) = icon_urls.and_then(primeira) else { return };
+            let scale = {
+                let Ok(mut p) = self.p.try_borrow_mut() else { return };
+                if p.favicon_url == url {
+                    return;
+                }
+                p.favicon_url = url.clone();
+                p.scale
+            };
+            if let Some(h) = browser.and_then(|b| b.host()) {
+                let mut cb = Favicon::new(self.p.clone(), url.clone());
+                h.download_image(Some(&url.as_str().into()), 1, (16.0 * scale).ceil() as u32, 0, Some(&mut cb));
+            }
+        }
+
         fn on_status_message(&self, _browser: Option<&mut Browser>, value: Option<&CefString>) {
             if let Ok(mut p) = self.p.try_borrow_mut() {
                 p.status = s(value);
+                p.dirty = true;
+            }
+        }
+    }
+}
+
+/// O primeiro endereço da lista (os ícones vêm do melhor para o pior).
+fn primeira(list: &mut CefStringList) -> Option<String> {
+    let raw: *mut cef::sys::_cef_string_list_t = list.into();
+    if raw.is_null() {
+        return None;
+    }
+    // Segurança: a lista é do motor e vale durante a chamada; o valor copiado é liberado aqui.
+    unsafe {
+        if cef::sys::cef_string_list_size(raw) == 0 {
+            return None;
+        }
+        let mut v: cef::sys::cef_string_t = std::mem::zeroed();
+        if cef::sys::cef_string_list_value(raw, 0, &mut v) == 0 {
+            return None;
+        }
+        let s = CefString::from(std::ptr::from_ref(&v)).to_string();
+        cef::sys::cef_string_utf16_clear(&mut v);
+        Some(s).filter(|s| !s.is_empty())
+    }
+}
+
+wrap_download_image_callback! {
+    pub struct Favicon {
+        p: Shared,
+        url: String,
+    }
+
+    impl DownloadImageCallback {
+        fn on_download_image_finished(&self, _image_url: Option<&CefString>, _http_status_code: ::std::os::raw::c_int, image: Option<&mut Image>) {
+            let Some(img) = image else { return };
+            let Ok(mut p) = self.p.try_borrow_mut() else { return };
+            // Outro ícone pedido depois deste: fica o mais novo.
+            if p.favicon_url != self.url {
+                return;
+            }
+            let (mut w, mut h) = (0, 0);
+            let Some(bin) = img.as_bitmap(p.scale, ColorType::RGBA_8888, AlphaType::PREMULTIPLIED, Some(&mut w), Some(&mut h)) else { return };
+            let mut buf = vec![0u8; bin.size()];
+            bin.data(Some(&mut buf), 0);
+            if w > 0 && h > 0 && buf.len() == (w * h * 4) as usize {
+                p.favicon = Some((buf, w, h));
+                p.favicon_novo = true;
                 p.dirty = true;
             }
         }
@@ -252,6 +352,17 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
+        fn on_load_error(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, error_code: Errorcode, error_text: Option<&CefString>, failed_url: Option<&CefString>) {
+            // Parar o carregamento (ou trocar de página no meio) não é erro.
+            if error_code == Errorcode::ABORTED || !frame.is_some_and(|f| f.is_main() != 0) {
+                return;
+            }
+            if let Ok(mut p) = self.p.try_borrow_mut() {
+                p.erro_pedido = Some((s(failed_url), s(error_text)));
+                p.dirty = true;
+            }
+        }
+
         fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: ::std::os::raw::c_int, can_go_back: ::std::os::raw::c_int, can_go_forward: ::std::os::raw::c_int) {
             if let Ok(mut p) = self.p.try_borrow_mut() {
                 p.loading = is_loading != 0;
