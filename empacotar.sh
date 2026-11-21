@@ -37,7 +37,7 @@ cp "$cefd"/locales/pt-BR*.pak "$cefd"/locales/en-US*.pak "$lib/locales/" 2>/dev/
 strip --strip-unneeded "$lib/libcef.so" "$lib/libvk_swiftshader.so" 2>/dev/null || true
 ln -s ../lib/jangada/jangada "$tmp/usr/bin/jangada"
 # O ícone nos tamanhos do tema (menus e lançadores de fora do Glove).
-"$d/jangada" --icones "$tmp/usr/share/icons/hicolor" || die "não deu para gerar os ícones"
+LD_LIBRARY_PATH="$cefd" "$d/jangada" --icones "$tmp/usr/share/icons/hicolor" || die "não deu para gerar os ícones"
 cat > "$tmp/usr/share/applications/jangada.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
