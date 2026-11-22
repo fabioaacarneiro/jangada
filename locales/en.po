@@ -524,3 +524,6 @@ msgstr "{} passwords in the system keyring (also in Keychain Access)."
 
 msgid "{} senhas não puderam ser decifradas."
 msgstr "{} passwords could not be decrypted."
+
+msgid "Pesquisar"
+msgstr "Search"

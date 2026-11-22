@@ -46,6 +46,9 @@ Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 - **Janela sem barra de título**, como a do Safari: os botões de fechar, minimizar e zoom ficam na
   própria barra da Jangada, ao lado de voltar e avançar; arrastar a barra (ou o espaço livre das
   abas) move a janela, e dois cliques dão o zoom. Sobra mais espaço para a página.
+- **Sugestões da barra:** ao digitar, a barra mostra a busca pelo que foi escrito e os favoritos e
+  sites do histórico que começam a palavra digitada (depois, os que apenas contêm). As setas
+  escolhem uma sugestão e o Enter a abre; o clique também.
 - **Barra de endereço** (como a do Safari): fora de foco mostra só o site, com o cadeado; clique ou
   Ctrl+L e digite um endereço ou uma busca (DuckDuckGo). Esc volta. Recarregar e parar ficam dentro
   dela.

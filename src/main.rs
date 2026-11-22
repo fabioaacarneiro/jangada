@@ -133,6 +133,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sugestoes_da_barra() {
+        let fav = vec![("Facebook".to_string(), "https://www.facebook.com/".to_string())];
+        let hist = vec![
+            ("GitHub - gui-python-gtk: Criando interfaces".to_string(), "https://github.com/natorsc/gui".to_string()),
+            ("Entrar no Facebook".to_string(), "https://pt-br.facebook.com/login".to_string()),
+        ];
+        let v = sugestoes_para("face", &fav, &hist);
+        // Primeiro a busca, depois o que começa palavra ou endereço, e não o que só contém.
+        assert!(v[0].1 == "face");
+        assert!(v.iter().any(|(_, u)| u.contains("pt-br.facebook.com")));
+        // "interfaces" só contém "face" (não começa palavra): vem depois do Facebook.
+        let pos = |p: &str| v.iter().position(|(_, u)| u.contains(p)).unwrap();
+        assert!(pos("pt-br.facebook.com") < pos("github"));
+        // Endereço completo não oferece a busca.
+        let e = sugestoes_para("github.com", &fav, &hist);
+        assert!(e.iter().all(|(_, u)| u != "github.com"));
+    }
+
+    #[test]
     fn barra_de_endereco() {
         let (ini, b) = ("file:///x/inicio.html", "https://duckduckgo.com/?q=");
         assert_eq!(endereco("wikipedia.org", ini, b), "https://wikipedia.org");
@@ -203,6 +222,14 @@ struct Navegador {
     teclas_da_barra: bool,
     aj: Ajustes,
     favoritos: Vec<(String, String)>,
+    /// Sugestões da barra de endereço (o que está sendo digitado): (título, endereço), a
+    /// escolhida com as setas, e a área onde a lista está desenhada (o mouse não passa para
+    /// a página por baixo dela).
+    sugestoes: Vec<(String, String)>,
+    sugestao_sel: Option<usize>,
+    sugestao_area: Option<Rect>,
+    /// O histórico inteiro (para as sugestões; a lista do menu é só dos últimos).
+    recentes_todos: Vec<(String, String)>,
     /// Os últimos do histórico (para o menu).
     recentes: Vec<(String, String)>,
     /// Buscar na página: aberto, o texto e se é para pôr o cursor nele.
@@ -665,10 +692,46 @@ impl Navegador {
             if enter || self.barra_foco {
                 self.teclas_da_barra = true;
             }
+            // As sugestões: o que já foi visitado ou é favorito, e a busca pelo que foi digitado.
+            // No quadro do Enter o campo já pode ter limpado o texto: a lista é a do quadro
+            // anterior (ela não é refeita nesse quadro).
+            let digitado = self.barra.trim().to_string();
             if enter {
-                let t = self.barra.clone();
+                // a lista e a escolha ficam como estavam
+            } else if self.barra_foco && !digitado.is_empty() {
+                let antes = self.sugestoes.clone();
+                self.sugestoes = sugestoes_para(&digitado, &self.favoritos, &self.recentes_todos);
+                if self.sugestoes != antes {
+                    self.sugestao_sel = None;
+                }
+                // As setas escolhem uma sugestão (o campo de uma linha não as usa).
+                let baixo = ui.keys().iter().filter(|k| k.key == glove_ui::ui::Key::Down).count();
+                let cima = ui.keys().iter().filter(|k| k.key == glove_ui::ui::Key::Up).count();
+                let n = self.sugestoes.len();
+                if n > 0 {
+                    for _ in 0..baixo {
+                        self.sugestao_sel = Some(self.sugestao_sel.map_or(0, |i| (i + 1).min(n - 1)));
+                    }
+                    for _ in 0..cima {
+                        self.sugestao_sel = match self.sugestao_sel {
+                            Some(0) | None => None,
+                            Some(i) => Some(i - 1),
+                        };
+                    }
+                }
+            } else {
+                self.sugestoes.clear();
+                self.sugestao_sel = None;
+            }
+            if enter {
+                let t = match self.sugestao_sel.and_then(|i| self.sugestoes.get(i)) {
+                    Some((_, u)) => u.clone(),
+                    None => self.barra.clone(),
+                };
                 self.carregar(&t);
                 self.barra_foco = false;
+                self.sugestoes.clear();
+                self.sugestao_sel = None;
             }
         } else {
             // Fora de foco: uma pílula com o site no meio (e o cadeado), como no Safari.
@@ -967,6 +1030,10 @@ impl Navegador {
     fn entrada(&mut self, ui: &mut Ui, area: Rect) {
         let Some(h) = self.host() else { return };
         let (px, py) = ui.pointer();
+        // Sobre a lista de sugestões, o mouse não vai para a página.
+        if self.sugestao_area.is_some_and(|r| r.contains((px, py))) {
+            return;
+        }
         let mods = ui.mods().clone();
         let flags = (if mods.shift { 1 << 1 } else { 0 }) | (if mods.ctrl { 1 << 2 } else { 0 }) | (if mods.alt { 1 << 3 } else { 0 }) | (if ui.mouse_down() { 1 << 4 } else { 0 });
         let ev = cef::MouseEvent { x: (px - area.x).round() as i32, y: (py - area.y).round() as i32, modifiers: flags };
@@ -1717,6 +1784,44 @@ fn cor_glifo(ui: &Ui, forca: f32) -> Color {
     rgba(v, v, v.saturating_add(4), 255)
 }
 
+fn fr_sugestao_w(w: f32) -> f32 {
+    (w - 240.0).clamp(120.0, 640.0)
+}
+
+fn fr_sugestao_x(w: f32) -> f32 {
+    ((w - fr_sugestao_w(w)) / 2.0).max(0.0)
+}
+
+/// As sugestões para o que foi digitado: a busca no que for digitado (se não é um endereço),
+/// depois os favoritos e o histórico que casam (título ou endereço), sem repetir endereço.
+fn sugestoes_para(digitado: &str, favoritos: &[(String, String)], historico: &[(String, String)]) -> Vec<(String, String)> {
+    let busca = digitado.to_lowercase();
+    let mut v: Vec<(String, String)> = Vec::new();
+    let eh_endereco = !digitado.contains(' ') && digitado.contains('.');
+    if !eh_endereco {
+        v.push((format!("{} {}", tr!("Pesquisar"), digitado), digitado.to_string()));
+    }
+    // Primeiro o que começa uma palavra do título ou o endereço (como o Safari), depois o
+    // resto que contém o texto.
+    let comeca_palavra = |t: &str, u: &str| {
+        let (t, u) = (t.to_lowercase(), u.to_lowercase());
+        let u = u.split_once("://").map_or(u.as_str(), |(_, r)| r).trim_start_matches("www.").to_string();
+        u.starts_with(&busca) || t.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&busca))
+    };
+    let todos: Vec<&(String, String)> = favoritos.iter().chain(historico.iter()).collect();
+    let mut ordem: Vec<&(String, String)> = todos.iter().copied().filter(|(t, u)| comeca_palavra(t, u)).collect();
+    ordem.extend(todos.iter().copied().filter(|(t, u)| !comeca_palavra(t, u) && (t.to_lowercase().contains(&busca) || u.to_lowercase().contains(&busca))));
+    for (t, u) in ordem {
+        if v.len() >= 8 {
+            break;
+        }
+        if !v.iter().any(|(_, x)| x == u) {
+            v.push((if t.is_empty() { site(u) } else { t.clone() }, u.clone()));
+        }
+    }
+    v
+}
+
 /// Desenha sem a troca automática de cores do tema escuro (os glifos já vêm na cor
 /// certa para o tema; a troca escureceria os claros).
 fn sem_troca(c: &mut Canvas, f: impl FnOnce(&mut Canvas)) {
@@ -1995,7 +2100,9 @@ impl App for Navegador {
         self.pagina_de_erro(ui.fonts);
         // O histórico do menu (os últimos 12), relido a cada poucos segundos.
         if self.hist_lido.elapsed() > Duration::from_secs(3) {
-            self.recentes = ajustes::historico().into_iter().take(12).collect();
+            let todos = ajustes::historico();
+            self.recentes = todos.iter().take(12).cloned().collect();
+            self.recentes_todos = todos;
             self.hist_lido = Instant::now();
             // As abas abertas ficam gravadas (se a Jangada cair, a sessão não se perde).
             self.gravar_sessao();
@@ -2114,6 +2221,37 @@ impl App for Navegador {
             }
             return;
         }
+        // As sugestões da barra, por cima da página (a página não recebe o que cai nelas).
+        self.sugestao_area = None;
+        if self.barra_foco && !self.sugestoes.is_empty() {
+            let n = self.sugestoes.len() as f32;
+            let r = Rect::new(fr_sugestao_x(w), BARRA_H - 4.0, fr_sugestao_w(w), n * 26.0 + 8.0);
+            self.sugestao_area = Some(r);
+            ui.c.fill(rrect(r.x, r.y, r.w, r.h, 8.0), &solid(if ui.theme.dark { rgba(44, 44, 48, 250) } else { rgba(252, 252, 254, 250) }));
+            ui.c.stroke(rrect(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0, 8.0), &solid(rgba(160, 160, 166, 255)), 1.0);
+            let mut escolhida = None;
+            for (i, (titulo, url)) in self.sugestoes.clone().iter().enumerate() {
+                let linha = Rect::new(r.x + 4.0, r.y + 4.0 + i as f32 * 26.0, r.w - 8.0, 24.0);
+                let h = ui.hit(linha);
+                let ativa = h.hover || self.sugestao_sel == Some(i);
+                if ativa {
+                    ui.c.fill(rrect(linha.x, linha.y, linha.w, linha.h, 5.0), &solid(ui.theme.accent));
+                }
+                let cor = if ativa { Color::WHITE } else { tinta() };
+                let t = ui.fonts.ellipsize(&format!("{}   {}", titulo, mostrar(url)), 12.0, false, linha.w - 16.0);
+                ui.fonts.draw(ui.c, &t, linha.x + 8.0, linha.y + 16.0, 12.0, false, cor);
+                if h.clicked {
+                    escolhida = Some(url.clone());
+                }
+            }
+            if let Some(u) = escolhida {
+                self.carregar(&u);
+                self.barra_foco = false;
+                self.sugestoes.clear();
+                self.sugestao_sel = None;
+                self.sugestao_area = None;
+            }
+        }
         // O mouse vai sempre para a página (passar sobre ela, a mãozinha nos links); o
         // teclado só quando nenhum campo da Jangada está em foco (ver `entrada`).
         self.entrada(ui, area);
@@ -2231,6 +2369,10 @@ fn main() -> std::process::ExitCode {
         teclas_da_barra: false,
         aj,
         favoritos,
+        sugestoes: Vec::new(),
+        sugestao_sel: None,
+        sugestao_area: None,
+        recentes_todos: Vec::new(),
         recentes: Vec::new(),
         achar: None,
         focar_achar: false,
