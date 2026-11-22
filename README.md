@@ -41,6 +41,30 @@ pergunta volta.
   esgotado.
 - **Captura da tela e do áudio do computador:** a Jangada não concede.
 
+## Extensões
+
+A Jangada aceita extensões no formato do Chrome (Manifest V3, o subconjunto que cabe aqui): uma
+pasta com um `manifest.json`, um `.zip` dela ou um link do GitHub. A instalação mostra as
+permissões antes de gravar; nada entra sem a sua confirmação.
+
+```sh
+jangada --instalar ./minha-extensao          # pasta ou .zip
+jangada --instalar https://github.com/usuario/repositorio   # ou .../tree/RAMO/PASTA
+jangada --extensoes                          # lista as instaladas (ativa ou não)
+jangada --remover ID                         # tira uma
+```
+
+Também dá para instalar e ligar ou desligar pelo Preferências ▸ **Instaladas**.
+
+- **Suporte:** `content_scripts` (com `matches`, `js`, `css` e `run_at`), `chrome.storage.local`
+  (guardado por extensão, no seu perfil) e os padrões de site do Chrome (`<all_urls>`, `*://`,
+  `*.dominio.com`, caminhos com `*`).
+- **Não há:** scripts de fundo (`background`), janela de ação, páginas de opções, APIs além do
+  `storage` e do acesso às páginas, nem `chrome.tabs` e afins.
+- **Limite:** os scripts rodam no mesmo mundo da página (não isolado), então não dá para esconder
+  nada dela; só instale extensões de quem você confia.
+- O exemplo completo está em `exemplos/destaque/` (aviso no topo de páginas e contagem de visitas).
+
 ## Janela privada
 
 **Arquivo ▸ Nova Janela Privada** (Ctrl+Shift+N) abre uma janela que não deixa rastro: o histórico,

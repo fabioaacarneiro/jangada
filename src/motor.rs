@@ -396,6 +396,20 @@ wrap_display_handler! {
         /// genéricos dos escudos) chegam pelo console; não aparecem no log.
         fn on_console_message(&self, browser: Option<&mut Browser>, _level: LogSeverity, message: Option<&CefString>, _source: Option<&CefString>, _line: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
             let m = s(message);
+            // O chrome.storage das extensões: a página pede pelo console e a Jangada responde.
+            if let Some(resto) = m.strip_prefix(crate::extensoes::MARCA) {
+                if let Ok(pedido) = serde_json::from_str::<serde_json::Value>(resto) {
+                    let id = pedido["ext"].as_str().unwrap_or("").to_string();
+                    let op = pedido["op"].as_str().unwrap_or("").to_string();
+                    let k = pedido["k"].clone();
+                    let resposta = crate::extensoes::armazenar(&id, &op, &pedido["d"]);
+                    if let Some(f) = browser.and_then(|b| b.main_frame()) {
+                        let js = format!("window.__jangadaResposta&&window.__jangadaResposta({k},{});", resposta);
+                        f.execute_java_script(Some(&js.as_str().into()), None, 0);
+                    }
+                }
+                return 1;
+            }
             if let Some(pedido) = crate::senhas::ler(&m) {
                 if let Some(f) = browser.and_then(|b| b.main_frame()) {
                     let origem = crate::importar::origem(&CefString::from(&f.url()).to_string());
@@ -574,6 +588,10 @@ wrap_load_handler! {
             }
             // As senhas: preencher as guardadas e oferecer guardar as novas.
             if let Some(js) = crate::senhas::script_da_pagina(&url) {
+                f.execute_java_script(Some(&js.as_str().into()), Some(&url.as_str().into()), 0);
+            }
+            // As extensões da Jangada que batem com a página (scripts e CSS de conteúdo).
+            if let Some(js) = crate::extensoes::script_para(&url) {
                 f.execute_java_script(Some(&js.as_str().into()), Some(&url.as_str().into()), 0);
             }
         }

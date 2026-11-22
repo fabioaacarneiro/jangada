@@ -1,0 +1,5 @@
+#destaque-de-exemplo {
+  position: sticky; top: 0; z-index: 2147483647;
+  background: #2f7cf6; color: #fff; font: 14px sans-serif;
+  padding: 6px 12px; text-align: center;
+}

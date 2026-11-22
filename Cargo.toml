@@ -2,7 +2,7 @@
 name = "jangada"
 # Jangada, o navegador do Glove OS: o motor do Chromium (CEF) desenhando a página dentro
 # de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
-version = "1.10.0"
+version = "1.11.0"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
@@ -23,6 +23,7 @@ zbus = { version = "5", default-features = false, features = ["blocking-api", "a
 # Importar de outros navegadores: favoritos (JSON), histórico, cookies e senhas (SQLite,
 # cifrados com AES-128-CBC e a chave do chaveiro).
 serde_json = "1"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 aes = "0.8"
 cbc = "0.1"

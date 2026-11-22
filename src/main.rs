@@ -8,6 +8,7 @@
 mod ajustes;
 mod chaveiro;
 mod escudos;
+mod extensoes;
 mod importar;
 mod inicio;
 mod motor;
@@ -187,6 +188,7 @@ enum Secao {
     Geral,
     Contas,
     Senhas,
+    Instaladas,
     Busca,
     Privacidade,
     Extensoes,
@@ -273,6 +275,12 @@ struct Navegador {
     google_lido: Instant,
     /// O caminho da imagem de fundo da página inicial (o que está sendo editado).
     fundo_imagem: String,
+    /// Extensões: a origem digitada, a preparação em andamento (uma pasta, um zip ou um
+    /// repositório), a extensão esperando a confirmação das permissões e a mensagem.
+    ext_fonte: String,
+    ext_rx: Option<std::sync::mpsc::Receiver<Result<extensoes::Extensao, String>>>,
+    ext_confirmar: Option<extensoes::Extensao>,
+    ext_msg: Option<String>,
     /// Preferências ▸ Senhas: as guardadas (sem os segredos), a escolhida, a rolagem e a
     /// senha à vista.
     senhas_lista: Option<Vec<chaveiro::Login>>,
@@ -1523,7 +1531,7 @@ impl Navegador {
         let w = ui.c.w;
         ui.c.fill_rect(0.0, 0.0, w, ui.c.h, &solid(ui.theme.body_a));
         ui.space(10.0);
-        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Contas, tr!("Contas")), (Secao::Senhas, tr!("Senhas")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
+        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Contas, tr!("Contas")), (Secao::Senhas, tr!("Senhas")), (Secao::Instaladas, tr!("Instaladas")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
         let nomes: Vec<&str> = secoes.iter().map(|s| s.1).collect();
         let mut i = secoes.iter().position(|s| s.0 == self.secao).unwrap_or(0);
         if ui.tabs(&mut i, &nomes) {
@@ -1695,6 +1703,54 @@ impl Navegador {
                     ui.small(&tr!("{} senhas no chaveiro do sistema (também no Acesso às Chaves).", lista.len()));
                 }
             }
+            Secao::Instaladas => {
+                ui.label_ex(tr!("Instalar uma extensão"), 12.0, true, tinta());
+                ui.space(4.0);
+                ui.paragraph(tr!("Uma pasta, um arquivo .zip ou um repositório do GitHub (https://github.com/usuario/repositorio). Antes de instalar, você vê o que ela pede."));
+                ui.space(4.0);
+                ui.horizontal(|ui| {
+                    ui.text_field(&mut self.ext_fonte, 330.0);
+                    let ocupado = self.ext_rx.is_some();
+                    ui.set_active(!ocupado && !self.ext_fonte.trim().is_empty());
+                    if ui.default_button(tr!("Verificar")) {
+                        let origem = self.ext_fonte.trim().to_string();
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(extensoes::preparar(&origem));
+                        });
+                        self.ext_rx = Some(rx);
+                        self.ext_msg = Some(tr!("Verificando…").into());
+                    }
+                    ui.set_active(true);
+                });
+                if let Some(m) = self.ext_msg.clone() {
+                    ui.small(&m);
+                }
+                ui.space(12.0);
+                ui.label_ex(tr!("Instaladas"), 12.0, true, tinta());
+                ui.space(4.0);
+                let lista = extensoes::listar();
+                if lista.is_empty() {
+                    ui.paragraph(tr!("Nenhuma extensão instalada."));
+                }
+                for e in lista {
+                    ui.push_id(&e.id, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut ativa = e.ativa;
+                            if ui.checkbox(&mut ativa, &format!("{} {}", e.nome, e.versao)) {
+                                extensoes::alternar(&e.id);
+                            }
+                            if ui.small_button(tr!("Remover")) {
+                                extensoes::remover(&e.id);
+                                self.ext_msg = Some(tr!("Extensão removida.").into());
+                            }
+                        });
+                        if !e.descricao.is_empty() {
+                            ui.small(&e.descricao);
+                        }
+                    });
+                }
+            }
             Secao::Busca => {
                 ui.label_ex(tr!("Buscador da barra de endereço e da página inicial"), 12.0, true, tinta());
                 let nomes: Vec<String> = ajustes::BUSCADORES.iter().map(|b| b.0.to_string()).collect();
@@ -1770,6 +1826,38 @@ impl Navegador {
                 }
             }
         });
+        // A preparação de uma extensão terminou: mostra o que ela pede e espera a escolha.
+        if let Some(rx) = &self.ext_rx {
+            match rx.try_recv() {
+                Ok(Ok(e)) => {
+                    self.ext_confirmar = Some(e);
+                    self.ext_rx = None;
+                    self.ext_msg = None;
+                }
+                Ok(Err(e)) => {
+                    self.ext_msg = Some(e);
+                    self.ext_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.wake_after(Duration::from_millis(200)),
+                Err(_) => self.ext_rx = None,
+            }
+        }
+        if let Some(e) = self.ext_confirmar.clone() {
+            let pede = if e.permissoes.is_empty() { tr!("Não pede acesso especial a nada.").to_string() } else { tr!("Pede acesso a: {}.", e.permissoes.join(", ")) };
+            let texto = format!("{} {} — {}\n{}", e.nome, e.versao, e.descricao, pede);
+            match ui.alert(glove_ui::AlertKind::Note, &tr!("Instalar esta extensão?"), &texto, &[tr!("Cancelar"), tr!("Instalar")]) {
+                Some(1) => {
+                    self.ext_msg = Some(match extensoes::instalar(&e) {
+                        Ok(i) => tr!("Instalada: {}.", i.nome).to_string(),
+                        Err(err) => err,
+                    });
+                    self.ext_confirmar = None;
+                    self.ext_fonte.clear();
+                }
+                Some(_) => self.ext_confirmar = None,
+                None => {}
+            }
+        }
         // Perguntas (em janela própria, pelo alerta do Glove).
         match self.pergunta {
             1 => match ui.alert(glove_ui::AlertKind::Caution, tr!("Limpar todo o histórico?"), tr!("Os sites visitados saem do menu Histórico. Os favoritos ficam."), &[tr!("Cancelar"), tr!("Limpar")]) {
@@ -2351,6 +2439,52 @@ impl App for Navegador {
     }
 }
 
+/// `jangada --instalar ORIGEM [--sim]`: mostra o que a extensão pede e instala (pergunta antes,
+/// a não ser com --sim). ORIGEM: uma pasta, um .zip ou um repositório do GitHub.
+fn instalar_pela_linha(resto: &[String]) -> std::process::ExitCode {
+    let Some(origem) = resto.iter().find(|a| !a.starts_with("--")) else {
+        eprintln!("uso: jangada --instalar PASTA | ARQUIVO.zip | https://github.com/USUARIO/REPOSITORIO [--sim]");
+        return 2.into();
+    };
+    let sim = resto.iter().any(|a| a == "--sim");
+    let prep = match extensoes::preparar(origem) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("jangada: {e}");
+            return 1.into();
+        }
+    };
+    println!("{} {} — {}", prep.nome, prep.versao, prep.descricao);
+    if prep.permissoes.is_empty() {
+        println!("Não pede permissões especiais.");
+    } else {
+        println!("Pede acesso a:");
+        for p in &prep.permissoes {
+            println!("  - {p}");
+        }
+    }
+    if !sim {
+        print!("Instalar? [s/N] ");
+        let _ = std::io::stdout().flush();
+        let mut r = String::new();
+        let _ = std::io::stdin().read_line(&mut r);
+        if !matches!(r.trim().to_lowercase().as_str(), "s" | "sim" | "y" | "yes") {
+            println!("Não instalada.");
+            return 0.into();
+        }
+    }
+    match extensoes::instalar(&prep) {
+        Ok(i) => {
+            println!("Instalada: {} ({})", i.nome, i.id);
+            0.into()
+        }
+        Err(e) => {
+            eprintln!("jangada: {e}");
+            1.into()
+        }
+    }
+}
+
 /// `jangada --icones PASTA`: o ícone da Jangada em PNG nos tamanhos do tema hicolor (para
 /// o pacote: menus e lançadores de fora do Glove usam esses arquivos).
 fn gerar_icones(dir: &std::path::Path) -> std::process::ExitCode {
@@ -2376,6 +2510,24 @@ fn main() -> std::process::ExitCode {
         if a == "--icones" {
             return gerar_icones(std::path::Path::new(&dir));
         }
+    }
+    // As extensões pela linha de comando (sem abrir o navegador).
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("--instalar") => return instalar_pela_linha(&args[2..]),
+        Some("--extensoes") => {
+            for e in extensoes::listar() {
+                println!("{}\t{} {}\t{}", e.id, e.nome, e.versao, if e.ativa { "ativa" } else { "desligada" });
+            }
+            return 0.into();
+        }
+        Some("--remover") => {
+            let id = args.get(2).cloned().unwrap_or_default();
+            extensoes::remover(&id);
+            println!("{id} removida.");
+            return 0.into();
+        }
+        _ => {}
     }
     let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
     let args = cef::args::Args::new();
@@ -2520,6 +2672,10 @@ fn main() -> std::process::ExitCode {
         mudou: true,
         google_lido: Instant::now() - Duration::from_secs(10),
         fundo_imagem,
+        ext_fonte: String::new(),
+        ext_rx: None,
+        ext_confirmar: None,
+        ext_msg: None,
         senhas_lista: None,
         senhas_sel: None,
         senhas_tabela: TableState::default(),

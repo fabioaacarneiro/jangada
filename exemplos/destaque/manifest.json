@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Destaque de exemplo",
+  "version": "1.0",
+  "description": "Um exemplo para a Jangada: põe um aviso no topo das páginas que você escolher e conta as visitas.",
+  "permissions": ["storage"],
+  "content_scripts": [
+    {
+      "matches": ["https://example.com/*", "http://127.0.0.1/*"],
+      "js": ["conteudo.js"],
+      "css": ["estilo.css"],
+      "run_at": "document_end"
+    }
+  ]
+}
