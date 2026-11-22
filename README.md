@@ -108,6 +108,21 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
 - Abrir de novo (`jangada endereço`) abre uma aba na janela que já está aberta.
 - No pacote, a Jangada vira o navegador padrão do sistema (`x-www-browser`).
 
+## Instalar
+
+Os pacotes saem na release de cada versão (`github.com/fabioaacarneiro/jangada/releases`):
+
+- **Debian, Ubuntu e Glove OS:** `jangada_VERSÃO_amd64.deb`. Vira o navegador padrão do sistema.
+- **Fedora:** `jangada-VERSÃO-1.x86_64.rpm` (`sudo dnf install ./jangada-*.rpm`). Testado no Fedora
+  mais novo; as dependências vêm pelo dnf.
+- **Arch:** `jangada-VERSÃO-1-x86_64.pkg.tar.zst` (`sudo pacman -U ./jangada-*.pkg.tar.zst`).
+- **Slackware 15.0 e -current:** `jangada-VERSÃO-x86_64-1.tgz` (`sudo installpkg ./jangada-*.tgz`).
+  O Slackware não resolve dependências: instale pelo slackpkg as que faltarem (a descrição do pacote
+  lista).
+
+Nos três últimos o pacote não troca o navegador padrão sozinho: escolha a Jangada nas configurações
+do sistema (ou com `xdg-settings set default-web-browser jangada.desktop`).
+
 ## Compilar e empacotar
 
 Precisa do Rust 1.89 ou mais novo, do cmake e de um compilador C++. A primeira compilação baixa o
@@ -118,10 +133,15 @@ git clone --recursive https://github.com/fabioaacarneiro/jangada
 cd jangada
 cargo build --release         # target/release/jangada (o motor fica ao lado)
 ./empacotar.sh                # pacotes/jangada_VERSÃO_amd64.deb
+./empacotar-rpm.sh            # pacotes/jangada-VERSÃO-1.x86_64.rpm (precisa do rpmbuild)
+./empacotar-arch.sh           # pacotes/jangada-VERSÃO-1-x86_64.pkg.tar.zst
+./empacotar-slackware.sh      # pacotes/jangada-VERSÃO-x86_64-1.tgz
 ```
+A árvore dos arquivos vem sempre de `preparar.sh`, a mesma para todos os formatos. O `ci/` tem os
+scripts que compilam e conferem cada distribuição em contêiner (é o que a CI roda).
 
-A cada tag `v*`, o CI gera o pacote e o publica na release; o repositório apt do Glove OS o pega de
-lá.
+A cada tag `v*`, o CI gera os pacotes (.deb, .rpm, Arch e Slackware), confere cada um instalando-o
+na própria distribuição e publica tudo na release. O repositório apt do Glove OS pega o .deb de lá.
 
 ## Licença
 

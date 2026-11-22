@@ -1,6 +1,8 @@
-# A cada tag v*: compila a Jangada no Debian trixie (a base do Glove OS), gera o .deb e o
-# publica na release da versão. O repositório apt do Glove OS pega o pacote daqui.
-name: Pacote da Jangada
+# A cada tag v*: compila a Jangada em cada distribuição (cada uma no seu contêiner) e
+# publica os pacotes na release: .deb (Debian, Ubuntu e Glove OS), .rpm (Fedora), o pacote
+# do Arch (.pkg.tar.zst) e o .tgz do Slackware. Cada pacote é instalado e conferido ali
+# mesmo (ci/*.sh): os programas têm de achar todas as bibliotecas.
+name: Pacotes da Jangada
 
 on:
   push:
@@ -11,7 +13,8 @@ permissions:
   contents: write
 
 jobs:
-  pacote:
+  deb:
+    name: deb (Debian trixie)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -46,15 +49,68 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: jangada
+          name: pacote-deb
           path: pacotes/*.deb
+          if-no-files-found: error
           retention-days: 7
 
-      - name: Publicar na release
-        if: startsWith(github.ref, 'refs/tags/')
+  distros:
+    name: ${{ matrix.distro }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      # Uma distribuição que falha não derruba as outras.
+      fail-fast: false
+      matrix:
+        include:
+          - distro: fedora
+            imagem: fedora:44
+            arquivos: pacotes/*.rpm
+          - distro: arch
+            imagem: archlinux:latest
+            arquivos: pacotes/*.pkg.tar.zst
+          # Compilado no 15.0 (estável), serve também para o -current.
+          - distro: slackware
+            imagem: aclemons/slackware:15.0
+            arquivos: pacotes/*.tgz
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Compilar, empacotar e conferir (${{ matrix.imagem }})
+        run: docker run --rm -v "$PWD:/src" -w /src ${{ matrix.imagem }} sh ci/${{ matrix.distro }}.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pacote-${{ matrix.distro }}
+          path: ${{ matrix.arquivos }}
+          if-no-files-found: error
+          retention-days: 7
+
+  publicar:
+    name: Publicar na release
+    needs: [deb, distros]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pacote-*
+          path: baixados
+          merge-multiple: true
+
+      - name: Publicar os pacotes na release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           notas=$(git log -1 --format=%B | grep -v '^Co-Authored-By:' || true)
-          gh release create "$GITHUB_REF_NAME" pacotes/*.deb --title "Jangada ${GITHUB_REF_NAME#v}" --notes "$notas" \
-            || gh release upload "$GITHUB_REF_NAME" pacotes/*.deb --clobber
+          gh release create "$GITHUB_REF_NAME" baixados/* --title "Jangada ${GITHUB_REF_NAME#v}" --notes "$notas" \
+            || gh release upload "$GITHUB_REF_NAME" baixados/* --clobber
