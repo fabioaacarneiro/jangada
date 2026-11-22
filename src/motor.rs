@@ -92,9 +92,12 @@ thread_local! {
     pub static IMPRIMIR: RefCell<Option<std::path::PathBuf>> = const { RefCell::new(None) };
     /// Mudou algo nos downloads (o app redesenha).
     pub static DOWNLOADS_MUDOU: Cell<bool> = const { Cell::new(false) };
-    /// Há uma sessão do Google aberta (os cookies da conta existem)? Atualizado por
-    /// `conferir_google`.
+    /// Há uma sessão do Google aberta (os cookies da conta existem)? É o resultado da
+    /// conferência anterior (`conferir_google`): a da vez vai para GOOGLE_NOVO e só passa
+    /// a valer na seguinte, quando já terminou (senão o estado piscava).
     pub static GOOGLE: Cell<bool> = const { Cell::new(false) };
+    static GOOGLE_NOVO: Cell<bool> = const { Cell::new(false) };
+    static GOOGLE_CONFERIDO: Cell<bool> = const { Cell::new(false) };
 }
 
 wrap_cookie_visitor! {
@@ -105,7 +108,7 @@ wrap_cookie_visitor! {
             if let Some(c) = cookie {
                 let nome = c.name.to_string();
                 if matches!(nome.as_str(), "SID" | "__Secure-1PSID" | "SAPISID" | "__Secure-3PSID") {
-                    GOOGLE.with(|g| g.set(true));
+                    GOOGLE_NOVO.with(|g| g.set(true));
                     return 0;
                 }
             }
@@ -118,7 +121,12 @@ wrap_cookie_visitor! {
 /// sessão do Google existem. A resposta chega em `GOOGLE` logo depois.
 pub fn conferir_google() {
     let Some(m) = cookie_manager_get_global_manager(None) else { return };
-    GOOGLE.with(|g| g.set(false));
+    // A conferência anterior já terminou: o resultado dela passa a valer.
+    if GOOGLE_CONFERIDO.with(|c| c.get()) {
+        GOOGLE.with(|g| g.set(GOOGLE_NOVO.with(|n| n.get())));
+    }
+    GOOGLE_CONFERIDO.with(|c| c.set(true));
+    GOOGLE_NOVO.with(|g| g.set(false));
     m.visit_url_cookies(Some(&"https://accounts.google.com/".into()), 1, Some(&mut Biscoitos::new()));
 }
 
@@ -188,6 +196,12 @@ wrap_app! {
             val(cl, "renderer-process-limit", "4");
             sw(cl, "process-per-site");
             val(cl, "disable-features", "BackForwardCache,Translate,MediaRouter,OptimizationHints,OptimizationGuideModelDownloading,InterestFeedContentSuggestions");
+            // Chaves de acesso (passkeys): sem janela própria o motor não mostra o pedido do
+            // sistema e a página fica esperando para sempre (o login do Facebook travava).
+            // Sem elas, os sites oferecem a senha e o código.
+            val(cl, "disable-blink-features", "WebAuth");
+            // O endereço da rede local não vaza pelo WebRTC (como no Brave).
+            val(cl, "force-webrtc-ip-handling-policy", "default_public_interface_only");
             sw(cl, "disable-background-networking");
             sw(cl, "disable-component-update");
             sw(cl, "no-first-run");
@@ -205,10 +219,60 @@ wrap_app! {
     }
 }
 
+/// O motor já subiu (as preferências do perfil só podem mudar depois disso).
+static INICIADO: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Barrar (ou não) os cookies de terceiros, como o Brave: a preferência do perfil.
+/// Grava cookies importados de outro navegador (as sessões abertas nos sites).
+pub fn gravar_cookies(v: &[crate::importar::Biscoito]) -> usize {
+    let Some(m) = cookie_manager_get_global_manager(None) else { return 0 };
+    let mut n = 0;
+    for b in v {
+        let host = b.host.trim_start_matches('.');
+        let url = format!("{}://{}{}", if b.seguro { "https" } else { "http" }, host, if b.caminho.is_empty() { "/" } else { &b.caminho });
+        let c = Cookie {
+            name: b.nome.as_str().into(),
+            value: b.valor.as_str().into(),
+            domain: b.host.as_str().into(),
+            path: b.caminho.as_str().into(),
+            secure: b.seguro as i32,
+            httponly: b.http_only as i32,
+            has_expires: (b.expira > 0) as i32,
+            expires: Basetime { val: b.expira },
+            same_site: match b.same_site {
+                0 => CookieSameSite::NO_RESTRICTION,
+                1 => CookieSameSite::LAX_MODE,
+                2 => CookieSameSite::STRICT_MODE,
+                _ => CookieSameSite::UNSPECIFIED,
+            },
+            ..Default::default()
+        };
+        if m.set_cookie(Some(&url.as_str().into()), Some(&c), None) != 0 {
+            n += 1;
+        }
+    }
+    n
+}
+
+pub fn aplicar_cookies(barrar: bool) {
+    if !INICIADO.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let (Some(ctx), Some(mut v)) = (request_context_get_global_context(), value_create()) else { return };
+    v.set_int(if barrar { 1 } else { 0 });
+    let mut erro = CefString::default();
+    ctx.set_preference(Some(&"profile.cookie_controls_mode".into()), Some(&mut v), Some(&mut erro));
+}
+
 wrap_browser_process_handler! {
     pub struct Processo;
 
     impl BrowserProcessHandler {
+        fn on_context_initialized(&self) {
+            INICIADO.store(true, std::sync::atomic::Ordering::Relaxed);
+            aplicar_cookies(crate::ajustes::COOKIES_TERCEIROS.load(std::sync::atomic::Ordering::Relaxed));
+        }
+
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
             BOMBA.with(|b| b.set(delay_ms.max(0)));
         }
@@ -323,6 +387,33 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
+        /// As mensagens dos scripts da Jangada na página (as classes e ids para os filtros
+        /// genéricos dos escudos) chegam pelo console; não aparecem no log.
+        fn on_console_message(&self, browser: Option<&mut Browser>, _level: LogSeverity, message: Option<&CefString>, _source: Option<&CefString>, _line: ::std::os::raw::c_int) -> ::std::os::raw::c_int {
+            let m = s(message);
+            if let Some(pedido) = crate::senhas::ler(&m) {
+                if let Some(f) = browser.and_then(|b| b.main_frame()) {
+                    let origem = crate::importar::origem(&CefString::from(&f.url()).to_string());
+                    match pedido {
+                        crate::senhas::Pedido::Preencher => {
+                            if let Some(js) = crate::senhas::script_preencher(&origem) {
+                                f.execute_java_script(Some(&js.as_str().into()), None, 0);
+                            }
+                        }
+                        crate::senhas::Pedido::Guardar(u, senha) => crate::senhas::enviado(&origem, &u, &senha),
+                    }
+                }
+                return 1;
+            }
+            let Some(resto) = m.strip_prefix(crate::escudos::MARCA) else { return 0 };
+            if let Some(b) = browser {
+                if let (Some(js), Some(f)) = (crate::escudos::cosmetico_generico(b.identifier(), resto), b.main_frame()) {
+                    f.execute_java_script(Some(&js.as_str().into()), None, 0);
+                }
+            }
+            1
+        }
+
         fn on_address_change(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
             if frame.is_some_and(|f| f.is_main() != 0) {
                 if let Ok(mut p) = self.p.try_borrow_mut() {
@@ -463,6 +554,22 @@ wrap_load_handler! {
             if let Ok(mut p) = self.p.try_borrow_mut() {
                 p.erro_pedido = Some((s(failed_url), s(error_text)));
                 p.dirty = true;
+            }
+        }
+
+        /// A página carregou: o estilo dos escudos (os anúncios do site escondidos).
+        fn on_load_end(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: ::std::os::raw::c_int) {
+            let (Some(b), Some(f)) = (browser, frame) else { return };
+            if f.is_main() == 0 {
+                return;
+            }
+            let url = CefString::from(&f.url()).to_string();
+            if let Some(js) = crate::escudos::script_da_pagina(b.identifier(), &url) {
+                f.execute_java_script(Some(&js.as_str().into()), Some(&url.as_str().into()), 0);
+            }
+            // As senhas: preencher as guardadas e oferecer guardar as novas.
+            if let Some(js) = crate::senhas::script_da_pagina(&url) {
+                f.execute_java_script(Some(&js.as_str().into()), Some(&url.as_str().into()), 0);
             }
         }
 
@@ -649,13 +756,13 @@ wrap_resource_request_handler! {
     pub struct Filtro;
 
     impl ResourceRequestHandler {
-        fn on_before_resource_load(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, request: Option<&mut Request>, _callback: Option<&mut Callback>) -> ReturnValue {
+        fn on_before_resource_load(&self, browser: Option<&mut Browser>, _frame: Option<&mut Frame>, request: Option<&mut Request>, _callback: Option<&mut Callback>) -> ReturnValue {
             let Some(r) = request else { return ReturnValue::CONTINUE };
-            if crate::ajustes::BLOQUEAR.load(std::sync::atomic::Ordering::Relaxed) {
-                let url = CefString::from(&r.url()).to_string();
-                if crate::ajustes::bloqueado(&url) {
-                    return ReturnValue::CANCEL;
-                }
+            // Os escudos (anúncios e rastreadores), por aba.
+            let aba = browser.map(|b| b.identifier()).unwrap_or(0);
+            let url = CefString::from(&r.url()).to_string();
+            if crate::escudos::barrar(aba, &url, tipo_de_recurso(r.resource_type())) {
+                return ReturnValue::CANCEL;
             }
             if crate::ajustes::NAO_RASTREAR.load(std::sync::atomic::Ordering::Relaxed) {
                 r.set_header_by_name(Some(&"DNT".into()), Some(&"1".into()), 1);
@@ -663,6 +770,23 @@ wrap_resource_request_handler! {
             }
             ReturnValue::CONTINUE
         }
+    }
+}
+
+/// O tipo do pedido no formato do motor de bloqueio.
+fn tipo_de_recurso(t: ResourceType) -> &'static str {
+    match t {
+        ResourceType::MAIN_FRAME => "document",
+        ResourceType::SUB_FRAME => "subdocument",
+        ResourceType::STYLESHEET => "stylesheet",
+        ResourceType::SCRIPT => "script",
+        ResourceType::IMAGE | ResourceType::FAVICON => "image",
+        ResourceType::FONT_RESOURCE => "font",
+        ResourceType::MEDIA => "media",
+        ResourceType::XHR => "xmlhttprequest",
+        ResourceType::PING | ResourceType::CSP_REPORT => "ping",
+        ResourceType::OBJECT | ResourceType::PLUGIN_RESOURCE => "object",
+        _ => "other",
     }
 }
 

@@ -6,8 +6,12 @@
 //!   jangada [ENDEREÇO…]   abre os endereços (numa janela que já esteja aberta, se houver)
 
 mod ajustes;
+mod chaveiro;
+mod escudos;
+mod importar;
 mod inicio;
 mod motor;
+mod senhas;
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -40,6 +44,7 @@ const JANELA_PREFS: u32 = 1;
 const GOOGLE_LOGIN: &str = "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F";
 const JANELA_HIST: u32 = 2;
 const JANELA_DOWN: u32 = 3;
+const JANELA_IMPORTAR: u32 = 4;
 
 /// Zoom das páginas (porcentagem) e o nível do motor (cada nível = ×1,2).
 const ZOOMS: [u32; 7] = [67, 80, 90, 100, 110, 125, 150];
@@ -162,6 +167,7 @@ struct Aba {
 enum Secao {
     Geral,
     Contas,
+    Senhas,
     Busca,
     Privacidade,
     Extensoes,
@@ -238,6 +244,21 @@ struct Navegador {
     mudou: bool,
     /// Quando a sessão do Google foi conferida (Preferências ▸ Contas).
     google_lido: Instant,
+    /// Preferências ▸ Senhas: as guardadas (sem os segredos), a escolhida, a rolagem e a
+    /// senha à vista.
+    senhas_lista: Option<Vec<chaveiro::Login>>,
+    senhas_sel: Option<usize>,
+    senhas_tabela: TableState,
+    senha_vista: Option<String>,
+    senhas_erro: Option<String>,
+    /// Importar de outro navegador: a janela pedida, os perfis achados, o escolhido, o que
+    /// importar, o trabalho e o resultado.
+    imp_abrir: bool,
+    imp_fontes: Vec<importar::Fonte>,
+    imp_escolha: usize,
+    imp_partes: importar::Partes,
+    imp_job: Option<std::sync::mpsc::Receiver<importar::Resultado>>,
+    imp_msg: Option<String>,
 }
 
 impl Navegador {
@@ -337,6 +358,9 @@ impl Navegador {
             }
         }
         let b = a.p.borrow().browser.clone();
+        if let Some(b) = &b {
+            escudos::esquecer(b.identifier());
+        }
         if let Some(h) = b.and_then(|b| b.host()) {
             h.close_browser(1);
         }
@@ -576,6 +600,41 @@ impl Navegador {
                 self.down_abrir = true;
             }
             dir -= 34.0;
+        }
+        // Os escudos (como o leão do Brave): quantos anúncios e rastreadores esta página
+        // teve barrados; o clique abre o menu deles.
+        {
+            let site_ = escudos::site(&url);
+            let web = url.starts_with("http");
+            let n = self.browser().map(|b| escudos::barrados(b.identifier())).unwrap_or(0);
+            let r = Rect::new(dir - 28.0, by, 28.0, 26.0);
+            let h = ui.hit(r);
+            if h.hover && web {
+                ui.c.fill(rrect(r.x, r.y, r.w, r.h, 6.0), &solid(rgba(0, 0, 0, if h.down { 34 } else { 18 })));
+            }
+            let ativo = web && escudos::valem(&site_);
+            let cor = if ativo { ui.theme.accent } else { cor_glifo(ui, 0.35) };
+            sem_troca(ui.c, |c| escudo(c, r.x + r.w / 2.0, r.y + r.h / 2.0, cor, ativo));
+            if ativo && n > 0 {
+                let t = if n > 99 { "99+".to_string() } else { n.to_string() };
+                let tw = ui.fonts.measure(&t, 8.5, true).max(7.0) + 5.0;
+                let (bx, byy) = (r.x + r.w - tw + 1.0, r.y + 1.0);
+                ui.c.fill(rrect(bx, byy, tw, 11.0, 5.5), &solid(rgba(230, 80, 30, 255)));
+                sem_troca(ui.c, |c| ui.fonts.draw(c, &t, bx + (tw - ui.fonts.measure(&t, 8.5, true)) / 2.0, byy + 8.5, 8.5, true, Color::WHITE));
+            }
+            if h.clicked && web {
+                let mut itens = vec![
+                    MenuItem::new("esc-site", &tr!("Escudos Ligados em {}", site_), "").checked(escudos::valem(&site_)).enabled(self.aj.bloqueador),
+                    MenuItem::new("esc-info", &tr!("{} anúncios e rastreadores barrados nesta página", n), "").enabled(false),
+                    MenuItem::Separator,
+                ];
+                itens.push(MenuItem::new("esc-todos", tr!("Escudos em Todos os Sites"), "").checked(self.aj.bloqueador));
+                itens.push(MenuItem::new("esc-cookies", tr!("Barrar Cookies de Terceiros"), "").checked(self.aj.cookies_terceiros));
+                itens.push(MenuItem::Separator);
+                itens.push(MenuItem::new("esc-prefs", tr!("Preferências dos Escudos…"), ""));
+                ui.context_menu((r.x, r.y + r.h + 2.0), &itens);
+            }
+            dir -= 32.0;
         }
         // O endereço no meio (no máximo 640 pontos, centrado como no Safari).
         let livre = (x0 + 104.0, dir - 6.0);
@@ -1110,6 +1169,29 @@ impl Navegador {
             match id {
                 "sobre" => self.sobre = true,
                 "reabrir-sessao" => self.reabrir_sessao(),
+                "importar" => self.imp_abrir = true,
+                "esc-site" => {
+                    escudos::alternar_site(&escudos::site(&self.url_atual()));
+                    self.atalho("Ctrl+R", false);
+                }
+                "esc-todos" | "ext-escudos" => {
+                    self.aj.bloqueador = !self.aj.bloqueador;
+                    self.aj.salvar();
+                    self.atalho("Ctrl+R", false);
+                }
+                "esc-cookies" | "ext-cookies" => {
+                    self.aj.cookies_terceiros = !self.aj.cookies_terceiros;
+                    self.aj.salvar();
+                }
+                "ext-escuro" => {
+                    self.aj.escuro_nas_paginas = !self.aj.escuro_nas_paginas;
+                    self.aj.salvar();
+                    self.reabrir = true;
+                }
+                "esc-prefs" | "ext-gerenciar" => {
+                    self.prefs = true;
+                    self.secao = Secao::Extensoes;
+                }
                 "google" => {
                     self.abrir(GOOGLE_LOGIN);
                     self.mudou = true;
@@ -1145,6 +1227,74 @@ impl Navegador {
                 f.load_url(Some(&dado.as_str().into()));
             }
         }
+    }
+
+    /// Importar de outro navegador (Chrome, Chromium, Brave, Edge, Vivaldi): o perfil, o
+    /// que trazer e o resultado.
+    fn janela_importar(&mut self, ui: &mut Ui) {
+        let (w, h) = (ui.c.w, ui.c.h);
+        ui.c.fill_rect(0.0, 0.0, w, h, &solid(ui.theme.body_a));
+        // O trabalho terminou: as sessões (cookies) vão para o motor aqui.
+        if let Some(rx) = &self.imp_job {
+            match rx.try_recv() {
+                Ok(r) => {
+                    let sessoes = motor::gravar_cookies(&r.cookies);
+                    self.favoritos = ajustes::favoritos();
+                    self.refazer_inicio(ui.fonts);
+                    self.senhas_lista = None;
+                    let mut m = tr!("Pronto: {} favoritos, {} sites do histórico, {} cookies de sessão e {} senhas.", r.favoritos, r.historico, sessoes, r.senhas);
+                    for p in r.problemas {
+                        m.push(' ');
+                        m.push_str(&p);
+                    }
+                    self.imp_msg = Some(m);
+                    self.imp_job = None;
+                    self.mudou = true;
+                    ui.redraw_all_windows();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ui.wake_after(Duration::from_millis(200)),
+                Err(_) => self.imp_job = None,
+            }
+        }
+        ui.area(Rect::new(20.0, 16.0, w - 40.0, h - 32.0), |ui| {
+            if self.imp_fontes.is_empty() {
+                ui.paragraph(tr!("Nenhum outro navegador da família do Chrome (Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi) foi encontrado nesta conta."));
+                return;
+            }
+            ui.label_ex(tr!("Importar de"), 12.0, true, tinta());
+            let nomes: Vec<String> = self.imp_fontes.iter().map(|f| f.nome.clone()).collect();
+            ui.popup(&mut self.imp_escolha, &nomes, 300.0);
+            ui.space(10.0);
+            let ocupado = self.imp_job.is_some();
+            ui.set_active(!ocupado);
+            ui.checkbox(&mut self.imp_partes.favoritos, tr!("Favoritos"));
+            ui.checkbox(&mut self.imp_partes.historico, tr!("Histórico"));
+            ui.checkbox(&mut self.imp_partes.sessoes, tr!("Sessões abertas nos sites (cookies)"));
+            ui.checkbox(&mut self.imp_partes.senhas, tr!("Senhas (vão para o chaveiro do sistema)"));
+            ui.set_active(true);
+            ui.space(8.0);
+            ui.paragraph(tr!("Vem o que o navegador guarda neste computador. Feche-o antes, para trazer tudo. As extensões dele não funcionam na Jangada."));
+            ui.space(6.0);
+            ui.horizontal(|ui| {
+                ui.set_active(!ocupado);
+                if ui.default_button(tr!("Importar")) {
+                    if let Some(f) = self.imp_fontes.get(self.imp_escolha).cloned() {
+                        let partes = self.imp_partes;
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        std::thread::spawn(move || {
+                            let _ = tx.send(importar::importar(&f, partes));
+                        });
+                        self.imp_job = Some(rx);
+                        self.imp_msg = Some(tr!("Importando…").into());
+                    }
+                }
+                ui.set_active(true);
+            });
+            if let Some(m) = &self.imp_msg {
+                ui.space(4.0);
+                ui.paragraph(m);
+            }
+        });
     }
 
     /// A janela Histórico (Ctrl+H): todos os sites visitados, com busca. Dois cliques
@@ -1283,7 +1433,7 @@ impl Navegador {
         let w = ui.c.w;
         ui.c.fill_rect(0.0, 0.0, w, ui.c.h, &solid(ui.theme.body_a));
         ui.space(10.0);
-        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Contas, tr!("Contas")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
+        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Contas, tr!("Contas")), (Secao::Senhas, tr!("Senhas")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
         let nomes: Vec<&str> = secoes.iter().map(|s| s.1).collect();
         let mut i = secoes.iter().position(|s| s.0 == self.secao).unwrap_or(0);
         if ui.tabs(&mut i, &nomes) {
@@ -1335,7 +1485,7 @@ impl Navegador {
             }
             Secao::Contas => {
                 // A sessão do Google: os cookies da conta, conferidos de tempos em tempos.
-                if self.google_lido.elapsed() > Duration::from_secs(2) {
+                if self.google_lido.elapsed() > Duration::from_secs(1) {
                     motor::conferir_google();
                     self.google_lido = Instant::now();
                 }
@@ -1361,6 +1511,74 @@ impl Navegador {
                 }
                 ui.space(12.0);
                 ui.paragraph(tr!("A sessão fica guardada na Jangada (como nos outros navegadores). A sincronização de favoritos e senhas do Chrome não existe no motor da Jangada."));
+            }
+            Secao::Senhas => {
+                ui.checkbox(&mut self.aj.senhas, tr!("Oferecer para guardar as senhas e preencher as guardadas"));
+                ui.space(4.0);
+                if self.senhas_lista.is_none() {
+                    match chaveiro::Chaveiro::abrir().and_then(|c| c.logins()) {
+                        Ok(v) => {
+                            self.senhas_lista = Some(v);
+                            self.senhas_erro = None;
+                        }
+                        Err(e) => {
+                            self.senhas_lista = Some(Vec::new());
+                            self.senhas_erro = Some(tr!("O chaveiro do sistema não respondeu: {}", e));
+                        }
+                    }
+                    self.senha_vista = None;
+                }
+                let lista = self.senhas_lista.clone().unwrap_or_default();
+                let linhas: Vec<TableRow> = lista.iter().map(|l| TableRow { cells: vec![escudos::site(&l.origem), l.usuario.clone(), if self.senhas_sel.and_then(|i| lista.get(i)) == Some(l) { self.senha_vista.clone().unwrap_or_else(|| "••••••••".into()) } else { "••••••••".into() }], ..Default::default() }).collect();
+                let cols = [Column::new(tr!("Site"), 0.4).fixed(), Column::new(tr!("Usuário"), 0.36).fixed(), Column::new(tr!("Senha"), 0.24).fixed()];
+                let (x, y) = ui.cursor();
+                let area = Rect::new(x, y, ui.available_width(), 170.0);
+                let r = ui.table(area, &cols, &linhas, self.senhas_sel, &mut self.senhas_tabela, &TableStyle { zebra: true, ..Default::default() });
+                ui.alloc(area.w, area.h);
+                if let Some(i) = r.pressed {
+                    if self.senhas_sel != Some(i) {
+                        self.senha_vista = None;
+                    }
+                    self.senhas_sel = Some(i);
+                }
+                let sel = self.senhas_sel.and_then(|i| lista.get(i)).cloned();
+                ui.space(4.0);
+                ui.horizontal(|ui| {
+                    ui.set_active(sel.is_some());
+                    let mostrar = if self.senha_vista.is_some() { tr!("Esconder") } else { tr!("Mostrar") };
+                    if ui.button(mostrar) {
+                        self.senha_vista = match self.senha_vista.take() {
+                            Some(_) => None,
+                            None => sel.as_ref().and_then(|l| chaveiro::Chaveiro::abrir().ok()?.segredo(&l.caminho).ok()).and_then(|s| String::from_utf8(s).ok()),
+                        };
+                    }
+                    if ui.button(tr!("Copiar a Senha")) {
+                        if let Some(s) = sel.as_ref().and_then(|l| chaveiro::Chaveiro::abrir().ok()?.segredo(&l.caminho).ok()).and_then(|s| String::from_utf8(s).ok()) {
+                            copiar_texto(&s);
+                            self.aviso = Some((tr!("Senha copiada.").into(), Instant::now()));
+                        }
+                    }
+                    if ui.button(tr!("Apagar")) {
+                        if let Some(l) = &sel {
+                            if let Ok(c) = chaveiro::Chaveiro::abrir() {
+                                let _ = c.apagar(&l.caminho);
+                            }
+                            self.senhas_lista = None;
+                            self.senhas_sel = None;
+                        }
+                    }
+                    ui.set_active(true);
+                    if ui.button(tr!("Importar…")) {
+                        self.imp_abrir = true;
+                        // Quem abre janelas é a principal: ela tem de passar por aqui.
+                        ui.redraw_all_windows();
+                    }
+                });
+                if let Some(e) = &self.senhas_erro {
+                    ui.small(e);
+                } else {
+                    ui.small(&tr!("{} senhas no chaveiro do sistema (também no Acesso às Chaves).", lista.len()));
+                }
             }
             Secao::Busca => {
                 ui.label_ex(tr!("Buscador da barra de endereço e da página inicial"), 12.0, true, tinta());
@@ -1390,13 +1608,26 @@ impl Navegador {
             Secao::Extensoes => {
                 ui.label_ex(tr!("Extensões da Jangada"), 12.0, true, tinta());
                 ui.space(6.0);
-                ui.checkbox(&mut self.aj.bloqueador, tr!("Bloqueador de anúncios e rastreadores"));
-                ui.paragraph(tr!("Barra os anúncios e os rastreadores conhecidos antes de carregar: as páginas ficam mais leves e mais rápidas."));
-                ui.space(8.0);
+                ui.checkbox(&mut self.aj.bloqueador, tr!("Escudos: anúncios e rastreadores"));
+                ui.paragraph(tr!("Com o motor de bloqueio do Brave e as listas EasyList, EasyPrivacy, a portuguesa, a do Peter Lowe e os filtros do uBlock Origin (renovadas toda semana): barra o que carregaria e esconde os espaços de anúncio na página."));
+                let fora = ajustes::escudos_fora().len();
+                if fora > 0 {
+                    ui.horizontal(|ui| {
+                        ui.small(&tr!("Desligados em {} sites.", fora));
+                        if ui.small_button(tr!("Ligar em Todos")) {
+                            ajustes::gravar_escudos_fora(&Default::default());
+                            escudos::recarregar_fora();
+                        }
+                    });
+                }
+                ui.space(6.0);
+                ui.checkbox(&mut self.aj.cookies_terceiros, tr!("Barrar cookies de terceiros"));
+                ui.paragraph(tr!("Os cookies que seguem você de site em site (os de propaganda) ficam de fora."));
+                ui.space(6.0);
                 ui.checkbox(&mut self.aj.escuro_nas_paginas, tr!("Modo escuro nas páginas"));
                 ui.paragraph(tr!("Escurece as páginas que não têm um modo escuro próprio (vale ao reabrir a Jangada)."));
-                ui.space(14.0);
-                ui.paragraph(tr!("As extensões da loja do Chrome ainda não funcionam na Jangada: o motor sem janela própria não as carrega."));
+                ui.space(10.0);
+                ui.paragraph(tr!("Extensões da loja do Chrome: o motor da Jangada desenha a página sem janela própria (é o que deixa a janela, as abas e os menus serem do Glove), e nesse modo o Chromium não carrega extensões. Por isso as principais vêm prontas aqui."));
             }
             Secao::Avancado => {
                 ui.checkbox(&mut self.aj.endereco_completo, tr!("Mostrar o endereço completo na barra"));
@@ -1456,6 +1687,30 @@ fn tinta() -> Color {
 
 /// A cor dos glifos das barras: `forca` 1 = ativo, menos = mais apagado. No tema escuro
 /// eles clareiam (os glifos não passam pela troca automática de cores do kit).
+/// O escudo (Escudos), centrado em (cx, cy); cheio quando ligado.
+fn escudo(c: &mut Canvas, cx: f32, cy: f32, cor: Color, cheio: bool) {
+    let (w, h) = (12.0, 14.0);
+    let (x, y) = (cx - w / 2.0, cy - h / 2.0);
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(cx, y);
+    pb.line_to(x + w, y + 2.5);
+    pb.cubic_to(x + w, y + 8.5, cx + 3.0, y + 12.0, cx, y + h);
+    pb.cubic_to(cx - 3.0, y + 12.0, x, y + 8.5, x, y + 2.5);
+    pb.close();
+    let p = pb.finish();
+    if cheio {
+        c.fill(p.clone(), &solid(cor));
+        // O visto branco por dentro.
+        let mut v = tiny_skia::PathBuilder::new();
+        v.move_to(cx - 3.0, cy);
+        v.line_to(cx - 0.6, cy + 2.4);
+        v.line_to(cx + 3.2, cy - 2.2);
+        c.stroke(v.finish(), &solid(Color::WHITE), 1.5);
+    } else {
+        c.stroke(p, &solid(cor), 1.3);
+    }
+}
+
 fn cor_glifo(ui: &Ui, forca: f32) -> Color {
     let (forte, fraco) = if ui.theme.dark { (228.0, 70.0) } else { (64.0, 200.0) };
     let v = (fraco + (forte - fraco) * forca.clamp(0.0, 1.0)) as u8;
@@ -1581,8 +1836,8 @@ impl App for Navegador {
         // O aviso de baixo some sozinho depois de 5 s.
         self.aviso.as_ref().map(|(_, t)| t.elapsed() < Duration::from_secs(5)).hash(&mut h);
         let assinatura = h.finish();
-        let downloads = motor::DOWNLOADS_MUDOU.with(|m| m.replace(false));
-        let mudou = std::mem::take(&mut self.mudou) || downloads || assinatura != self.assinatura || carregando;
+        let downloads = motor::DOWNLOADS_MUDOU.with(|m| m.replace(false)) || senhas::PARA_GUARDAR.with(|p| !p.borrow().is_empty()) || self.imp_job.is_some();
+        let mudou = std::mem::take(&mut self.mudou) || self.imp_abrir || self.hist_abrir || self.down_abrir || downloads || assinatura != self.assinatura || carregando;
         self.assinatura = assinatura;
         mudou
     }
@@ -1653,6 +1908,8 @@ impl App for Navegador {
                 MenuItem::new("nova-aba", tr!("Nova Aba"), "Ctrl+T"),
                 MenuItem::new("abrir-local", tr!("Abrir Endereço…"), "Ctrl+L"),
                 MenuItem::Separator,
+                MenuItem::new("importar", tr!("Importar de Outro Navegador…"), ""),
+                MenuItem::Separator,
                 MenuItem::new("pdf", tr!("Salvar como PDF"), ""),
                 MenuItem::new("imprimir", tr!("Imprimir…"), "Ctrl+P"),
                 MenuItem::Separator,
@@ -1680,6 +1937,13 @@ impl App for Navegador {
             ]),
             Menu::new(tr!("Histórico"), m_hist),
             Menu::new(tr!("Favoritos"), m_favs),
+            Menu::new(tr!("Extensões"), vec![
+                MenuItem::new("ext-escudos", tr!("Escudos: Anúncios e Rastreadores"), "").checked(self.aj.bloqueador),
+                MenuItem::new("ext-cookies", tr!("Barrar Cookies de Terceiros"), "").checked(self.aj.cookies_terceiros),
+                MenuItem::new("ext-escuro", tr!("Modo Escuro nas Páginas"), "").checked(self.aj.escuro_nas_paginas),
+                MenuItem::Separator,
+                MenuItem::new("ext-gerenciar", tr!("Gerenciar Extensões…"), ""),
+            ]),
         ]
     }
 
@@ -1688,6 +1952,7 @@ impl App for Navegador {
             JANELA_PREFS => return self.preferencias(ui),
             JANELA_HIST => return self.janela_historico(ui),
             JANELA_DOWN => return self.janela_downloads(ui),
+            JANELA_IMPORTAR => return self.janela_importar(ui),
             0 => {}
             // Outra janela (do kit): o navegador só se desenha na principal.
             _ => return,
@@ -1712,6 +1977,12 @@ impl App for Navegador {
             self.hist_busca.clear();
             self.hist_sel = None;
             ui.open_window(JANELA_HIST, WindowOptions { title: tr!("Histórico").into(), app_id: "glove.Navegador".into(), size: (720, 480), fixed: false, min_size: Some((420, 260)) });
+        }
+        if std::mem::take(&mut self.imp_abrir) {
+            self.imp_fontes = importar::fontes();
+            self.imp_escolha = 0;
+            self.imp_msg = None;
+            ui.open_window(JANELA_IMPORTAR, WindowOptions { title: tr!("Importar de Outro Navegador").into(), app_id: "glove.Navegador".into(), size: (460, 330), fixed: true, min_size: None });
         }
         if std::mem::take(&mut self.down_abrir) {
             ui.open_window(JANELA_DOWN, WindowOptions { title: tr!("Downloads").into(), app_id: "glove.Navegador".into(), size: (560, 340), fixed: false, min_size: Some((380, 200)) });
@@ -1795,7 +2066,28 @@ impl App for Navegador {
         ui.set_title(if titulo.is_empty() { "Jangada" } else { &titulo });
         // alert()/confirm() da página: alerta do Glove (janela própria).
         let dialog = self.aba().and_then(|a| a.p.borrow().dialog.clone());
-        if let Some((confirm, msg, cb)) = dialog {
+        let guardar = senhas::PARA_GUARDAR.with(|p| p.borrow().first().cloned());
+        if let (Some((origem, usuario, senha)), None) = (guardar, &dialog) {
+            let site_ = escudos::site(&origem);
+            let quem = if usuario.is_empty() { site_.clone() } else { tr!("{} em {}", usuario, site_) };
+            let texto = tr!("A senha fica no chaveiro do sistema, e a Jangada a preenche da próxima vez.");
+            if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &tr!("Guardar a senha de {}?", quem), &texto, &[tr!("Nunca"), tr!("Agora Não"), tr!("Guardar")]) {
+                senhas::PARA_GUARDAR.with(|p| p.borrow_mut().retain(|(o, u, _)| !(*o == origem && *u == usuario)));
+                match i {
+                    0 => ajustes::nunca_guardar_em(&origem),
+                    2 => {
+                        std::thread::spawn(move || {
+                            if let Ok(c) = chaveiro::Chaveiro::abrir() {
+                                let _ = c.guardar(&origem, &usuario, &senha);
+                            }
+                        });
+                        self.senhas_lista = None;
+                        self.aviso = Some((tr!("Senha guardada.").into(), Instant::now()));
+                    }
+                    _ => {}
+                }
+            }
+        } else if let Some((confirm, msg, cb)) = dialog {
             let botoes: Vec<&str> = if confirm { vec![tr!("Cancelar"), tr!("OK")] } else { vec![tr!("OK")] };
             let url = site(&self.url_atual());
             if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &tr!("A página {} diz:", url), &msg, &botoes) {
@@ -1913,6 +2205,8 @@ fn main() -> std::process::ExitCode {
         eprintln!("jangada: o motor do Chromium não iniciou");
         return 1.into();
     }
+    // Os escudos sobem numa linha à parte (o motor guardado abre na hora).
+    escudos::iniciar();
     // As abas da última vez: reabertas já (Preferências) ou guardadas para o menu Histórico.
     let sessao = ajustes::sessao();
     let aj_reabrir = aj.reabrir_abas && urls.is_empty();
@@ -1962,6 +2256,17 @@ fn main() -> std::process::ExitCode {
         down_tabela: TableState::default(),
         mudou: true,
         google_lido: Instant::now() - Duration::from_secs(10),
+        senhas_lista: None,
+        senhas_sel: None,
+        senhas_tabela: TableState::default(),
+        senha_vista: None,
+        senhas_erro: None,
+        imp_abrir: false,
+        imp_fontes: Vec::new(),
+        imp_escolha: 0,
+        imp_partes: importar::Partes { favoritos: true, historico: true, sessoes: true, senhas: true },
+        imp_job: None,
+        imp_msg: None,
     };
     if !urls.is_empty() {
         for u in &urls {

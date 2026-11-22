@@ -386,3 +386,141 @@ msgstr "Sign Out of Google"
 
 msgid "Você está com a sessão aberta numa conta do Google: Gmail, YouTube, Drive e os outros serviços já abrem com ela."
 msgstr "You are signed in to a Google account: Gmail, YouTube, Drive and the other services open with it."
+
+msgid "A senha fica no chaveiro do sistema, e a Jangada a preenche da próxima vez."
+msgstr "The password is kept in the system keyring, and Jangada fills it in next time."
+
+msgid "Agora Não"
+msgstr "Not Now"
+
+msgid "Barrar Cookies de Terceiros"
+msgstr "Block Third-Party Cookies"
+
+msgid "Barrar cookies de terceiros"
+msgstr "Block third-party cookies"
+
+msgid "Com o motor de bloqueio do Brave e as listas EasyList, EasyPrivacy, a portuguesa, a do Peter Lowe e os filtros do uBlock Origin (renovadas toda semana): barra o que carregaria e esconde os espaços de anúncio na página."
+msgstr "With Brave's blocking engine and the EasyList, EasyPrivacy, Portuguese, Peter Lowe's and uBlock Origin lists (refreshed every week): blocks what would load and hides ad slots on the page."
+
+msgid "Copiar a Senha"
+msgstr "Copy Password"
+
+msgid "Desligados em {} sites."
+msgstr "Off on {} sites."
+
+msgid "Esconder"
+msgstr "Hide"
+
+msgid "Escudos Ligados em {}"
+msgstr "Shields Up on {}"
+
+msgid "Escudos em Todos os Sites"
+msgstr "Shields on All Sites"
+
+msgid "Escudos: Anúncios e Rastreadores"
+msgstr "Shields: Ads and Trackers"
+
+msgid "Escudos: anúncios e rastreadores"
+msgstr "Shields: ads and trackers"
+
+msgid "Extensões da loja do Chrome: o motor da Jangada desenha a página sem janela própria (é o que deixa a janela, as abas e os menus serem do Glove), e nesse modo o Chromium não carrega extensões. Por isso as principais vêm prontas aqui."
+msgstr "Chrome Web Store extensions: Jangada's engine draws the page without a window of its own (that is what lets the window, tabs and menus be Glove's), and in that mode Chromium does not load extensions. That is why the main ones come built in here."
+
+msgid "Gerenciar Extensões…"
+msgstr "Manage Extensions…"
+
+msgid "Guardar"
+msgstr "Save"
+
+msgid "Guardar a senha de {}?"
+msgstr "Save the password for {}?"
+
+msgid "Importando…"
+msgstr "Importing…"
+
+msgid "Importar"
+msgstr "Import"
+
+msgid "Importar de"
+msgstr "Import from"
+
+msgid "Importar de Outro Navegador"
+msgstr "Import from Another Browser"
+
+msgid "Importar de Outro Navegador…"
+msgstr "Import from Another Browser…"
+
+msgid "Importar…"
+msgstr "Import…"
+
+msgid "Ligar em Todos"
+msgstr "Turn On Everywhere"
+
+msgid "Modo Escuro nas Páginas"
+msgstr "Dark Mode on Pages"
+
+msgid "Mostrar"
+msgstr "Show"
+
+msgid "Nenhum outro navegador da família do Chrome (Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi) foi encontrado nesta conta."
+msgstr "No other Chrome-family browser (Google Chrome, Chromium, Brave, Microsoft Edge, Vivaldi) was found in this account."
+
+msgid "Nunca"
+msgstr "Never"
+
+msgid "Não achei a chave do navegador no chaveiro: só os dados sem a chave do sistema puderam ser lidos."
+msgstr "The browser's key was not found in the keyring: only data not protected by the system key could be read."
+
+msgid "O chaveiro do sistema não respondeu: {}"
+msgstr "The system keyring did not respond: {}"
+
+msgid "Oferecer para guardar as senhas e preencher as guardadas"
+msgstr "Offer to save passwords and fill in saved ones"
+
+msgid "Os cookies que seguem você de site em site (os de propaganda) ficam de fora."
+msgstr "Cookies that follow you from site to site (advertising ones) are kept out."
+
+msgid "Preferências dos Escudos…"
+msgstr "Shields Preferences…"
+
+msgid "Pronto: {} favoritos, {} sites do histórico, {} cookies de sessão e {} senhas."
+msgstr "Done: {} favorites, {} history sites, {} session cookies and {} passwords."
+
+msgid "Senha"
+msgstr "Password"
+
+msgid "Senha copiada."
+msgstr "Password copied."
+
+msgid "Senha guardada."
+msgstr "Password saved."
+
+msgid "Senhas"
+msgstr "Passwords"
+
+msgid "Senhas (vão para o chaveiro do sistema)"
+msgstr "Passwords (go to the system keyring)"
+
+msgid "Sessões abertas nos sites (cookies)"
+msgstr "Signed-in sessions on sites (cookies)"
+
+msgid "Site"
+msgstr "Site"
+
+msgid "Usuário"
+msgstr "Username"
+
+msgid "Vem o que o navegador guarda neste computador. Feche-o antes, para trazer tudo. As extensões dele não funcionam na Jangada."
+msgstr "What the browser keeps on this computer comes over. Close it first to bring everything. Its extensions do not work in Jangada."
+
+msgid "{} anúncios e rastreadores barrados nesta página"
+msgstr "{} ads and trackers blocked on this page"
+
+msgid "{} cookies não puderam ser decifrados."
+msgstr "{} cookies could not be decrypted."
+
+msgid "{} senhas no chaveiro do sistema (também no Acesso às Chaves)."
+msgstr "{} passwords in the system keyring (also in Keychain Access)."
+
+msgid "{} senhas não puderam ser decifradas."
+msgstr "{} passwords could not be decrypted."

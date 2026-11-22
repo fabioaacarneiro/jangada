@@ -19,6 +19,28 @@ Feita para computadores modestos:
 
 Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 
+## Escudos, senhas e importar
+
+- **Escudos** (como os do Brave, com o mesmo motor de bloqueio dele, o `adblock`): anúncios e
+  rastreadores barrados antes de carregar (EasyList, EasyPrivacy, a lista portuguesa, a do Peter Lowe
+  e os filtros do uBlock Origin, renovadas toda semana em `~/.cache/jangada/escudos`) e os espaços de
+  anúncio escondidos na página. O escudo na barra mostra quantos itens a página teve barrados; o
+  clique liga ou desliga os escudos no site. Também barra os cookies de terceiros e não deixa o
+  WebRTC mostrar o endereço da rede local.
+- **Senhas:** ao entrar num site, a Jangada oferece guardar a senha (no chaveiro do sistema: aparece
+  no Acesso às Chaves do Glove) e a preenche da próxima vez. Preferências ▸ Senhas lista, mostra,
+  copia e apaga.
+- **Importar de outro navegador** (Arquivo ▸ Importar de Outro Navegador…): do Google Chrome,
+  Chromium, Brave, Microsoft Edge ou Vivaldi deste computador, os favoritos, o histórico, as sessões
+  abertas nos sites (os cookies: continua com as contas abertas) e as senhas, decifrados com a chave
+  que o próprio navegador guarda no chaveiro. A sincronização com a conta do Google só existe no
+  Chrome; o que vem é o que ele guarda no computador.
+- **Extensões** (menu Extensões): as da Jangada (escudos, cookies de terceiros, modo escuro nas
+  páginas). As da loja do Chrome não funcionam: o motor desenha a página sem janela própria (é o que
+  deixa a janela, as abas e os menus serem do Glove), e nesse modo o Chromium não carrega extensões.
+- **Chaves de acesso (passkeys)** ficam desligadas: sem janela própria o motor não mostra o pedido
+  do sistema, e a página ficava esperando para sempre. Os sites oferecem a senha e o código.
+
 ## Como usar
 
 - **Janela sem barra de título**, como a do Safari: os botões de fechar, minimizar e zoom ficam na

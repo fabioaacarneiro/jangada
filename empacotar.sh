@@ -91,7 +91,7 @@ Architecture: amd64
 Maintainer: Fabio Carneiro <fabioaacarneiro@gmail.com>
 Installed-Size: $size
 Depends: libnss3, libnspr4, libatk1.0-0t64 | libatk1.0-0, libatk-bridge2.0-0t64 | libatk-bridge2.0-0, libcups2t64 | libcups2, libxcomposite1, libxdamage1, libxrandr2, libxext6, libxfixes3, libx11-6, libxcb1, libxkbcommon0, libgbm1, libdrm2, libpango-1.0-0, libcairo2, libasound2t64 | libasound2, libdbus-1-3, libexpat1, libudev1, libglib2.0-0t64 | libglib2.0-0
-Recommends: wl-clipboard
+Recommends: wl-clipboard, curl, gnome-keyring | kwalletmanager | keepassxc
 Provides: glove-web, www-browser
 Conflicts: glove-web
 Replaces: glove-web

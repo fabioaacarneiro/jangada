@@ -19,6 +19,7 @@ pub const BUSCADORES: [(&str, &str); 6] = [
 pub static BLOQUEAR: AtomicBool = AtomicBool::new(true);
 pub static NAO_RASTREAR: AtomicBool = AtomicBool::new(true);
 pub static BLOQUEAR_JANELAS: AtomicBool = AtomicBool::new(true);
+pub static COOKIES_TERCEIROS: AtomicBool = AtomicBool::new(true);
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ajustes {
@@ -34,6 +35,10 @@ pub struct Ajustes {
     pub nao_rastrear: bool,
     pub escuro_nas_paginas: bool,
     pub bloquear_janelas: bool,
+    /// Barrar os cookies de terceiros (os que seguem a pessoa de site em site).
+    pub cookies_terceiros: bool,
+    /// Oferecer para guardar as senhas e preencher as guardadas.
+    pub senhas: bool,
     /// Avançado.
     pub placa_de_video: bool,
     pub endereco_completo: bool,
@@ -43,7 +48,7 @@ pub struct Ajustes {
 
 impl Default for Ajustes {
     fn default() -> Self {
-        Self { inicio: String::new(), reabrir_abas: false, busca: 0, barra_favoritos: true, bloqueador: true, nao_rastrear: true, escuro_nas_paginas: false, bloquear_janelas: true, placa_de_video: false, endereco_completo: false, zoom: 0.0 }
+        Self { inicio: String::new(), reabrir_abas: false, busca: 0, barra_favoritos: true, bloqueador: true, nao_rastrear: true, escuro_nas_paginas: false, bloquear_janelas: true, cookies_terceiros: true, senhas: true, placa_de_video: false, endereco_completo: false, zoom: 0.0 }
     }
 }
 
@@ -74,6 +79,8 @@ impl Ajustes {
                 "nao_rastrear" => a.nao_rastrear = sim(v),
                 "escuro_nas_paginas" => a.escuro_nas_paginas = sim(v),
                 "bloquear_janelas" => a.bloquear_janelas = sim(v),
+                "cookies_terceiros" => a.cookies_terceiros = sim(v),
+                "senhas" => a.senhas = sim(v),
                 "placa_de_video" => a.placa_de_video = sim(v),
                 "endereco_completo" => a.endereco_completo = sim(v),
                 "zoom" => a.zoom = v.parse().unwrap_or(0.0),
@@ -86,8 +93,8 @@ impl Ajustes {
     pub fn salvar(&self) {
         let b = |v: bool| if v { "sim" } else { "nao" };
         let t = format!(
-            "# Preferências da Jangada (Jangada ▸ Preferências…)\ninicio = {}\nreabrir_abas = {}\nbusca = {}\nbarra_favoritos = {}\nbloqueador = {}\nnao_rastrear = {}\nescuro_nas_paginas = {}\nbloquear_janelas = {}\nplaca_de_video = {}\nendereco_completo = {}\nzoom = {}\n",
-            self.inicio, b(self.reabrir_abas), self.busca, b(self.barra_favoritos), b(self.bloqueador), b(self.nao_rastrear), b(self.escuro_nas_paginas), b(self.bloquear_janelas), b(self.placa_de_video), b(self.endereco_completo), self.zoom
+            "# Preferências da Jangada (Jangada ▸ Preferências…)\ninicio = {}\nreabrir_abas = {}\nbusca = {}\nbarra_favoritos = {}\nbloqueador = {}\nnao_rastrear = {}\nescuro_nas_paginas = {}\nbloquear_janelas = {}\ncookies_terceiros = {}\nsenhas = {}\nplaca_de_video = {}\nendereco_completo = {}\nzoom = {}\n",
+            self.inicio, b(self.reabrir_abas), self.busca, b(self.barra_favoritos), b(self.bloqueador), b(self.nao_rastrear), b(self.escuro_nas_paginas), b(self.bloquear_janelas), b(self.cookies_terceiros), b(self.senhas), b(self.placa_de_video), b(self.endereco_completo), self.zoom
         );
         let _ = std::fs::write(pasta().join("ajustes.conf"), t);
         self.aplicar();
@@ -98,6 +105,9 @@ impl Ajustes {
         BLOQUEAR.store(self.bloqueador, Ordering::Relaxed);
         NAO_RASTREAR.store(self.nao_rastrear, Ordering::Relaxed);
         BLOQUEAR_JANELAS.store(self.bloquear_janelas, Ordering::Relaxed);
+        COOKIES_TERCEIROS.store(self.cookies_terceiros, Ordering::Relaxed);
+        crate::senhas::LIGADO.store(self.senhas, Ordering::Relaxed);
+        crate::motor::aplicar_cookies(self.cookies_terceiros);
     }
 
     pub fn busca_url(&self) -> &'static str {
@@ -155,6 +165,24 @@ pub fn apagar_do_historico(url: &str) {
     gravar_lista("historico.tsv", &v);
 }
 
+/// Junta visitas importadas ao fim do histórico (sem repetir endereço). Devolve quantas
+/// entraram.
+pub fn juntar_historico(novas: &[(String, String)]) -> usize {
+    let mut v = historico();
+    let mut n = 0;
+    for (t, u) in novas {
+        if v.len() >= 2000 {
+            break;
+        }
+        if !v.iter().any(|(_, x)| x == u) {
+            v.push((t.clone(), u.clone()));
+            n += 1;
+        }
+    }
+    gravar_lista("historico.tsv", &v);
+    n
+}
+
 pub fn limpar_historico() {
     let _ = std::fs::remove_file(pasta().join("historico.tsv"));
 }
@@ -173,7 +201,7 @@ pub fn gravar_sessao(urls: &[String]) {
 // ---------------------------------------------------------------------------
 
 /// Domínios de anúncios e de rastreamento conhecidos (e os subdomínios deles).
-const BLOQUEADOS: &[&str] = &[
+pub const BLOQUEADOS: &[&str] = &[
     "doubleclick.net", "googlesyndication.com", "googleadservices.com", "google-analytics.com", "googletagmanager.com",
     "googletagservices.com", "adservice.google.com", "pagead2.googlesyndication.com", "analytics.google.com",
     "connect.facebook.net", "facebook.com/tr", "ads.linkedin.com", "analytics.twitter.com", "ads-twitter.com",
@@ -191,31 +219,27 @@ const BLOQUEADOS: &[&str] = &[
     "exoclick.com", "juicyads.com", "trafficjunky.net", "hotjar.io", "mouseflow.com", "crazyegg.com", "luckyorange.com",
 ];
 
-/// O endereço é de anúncio ou rastreador conhecido?
-pub fn bloqueado(url: &str) -> bool {
-    let Some(resto) = url.split("://").nth(1) else { return false };
-    let host = resto.split(['/', '?', '#', ':']).next().unwrap_or("").to_ascii_lowercase();
-    let caminho = resto.to_ascii_lowercase();
-    BLOQUEADOS.iter().any(|d| {
-        if d.contains('/') {
-            caminho.starts_with(d) || caminho.contains(&format!(".{d}"))
-        } else {
-            host == *d || host.ends_with(&format!(".{d}"))
-        }
-    })
+/// Os sites em que a Jangada não oferece guardar a senha ("Nunca Neste Site").
+pub fn nunca_guardar() -> std::collections::HashSet<String> {
+    std::fs::read_to_string(pasta().join("senhas-nunca.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub fn nunca_guardar_em(origem: &str) {
+    let mut v = nunca_guardar();
+    v.insert(origem.to_string());
+    let mut l: Vec<String> = v.into_iter().collect();
+    l.sort();
+    let _ = std::fs::write(pasta().join("senhas-nunca.txt"), l.join("\n") + "\n");
+}
 
-    #[test]
-    fn bloqueador() {
-        assert!(bloqueado("https://securepubads.g.doubleclick.net/tag/js/gpt.js"));
-        assert!(bloqueado("https://www.google-analytics.com/analytics.js"));
-        assert!(bloqueado("https://connect.facebook.net/en_US/fbevents.js"));
-        assert!(!bloqueado("https://www.google.com/search?q=doubleclick.net"));
-        assert!(!bloqueado("https://pt.wikipedia.org/wiki/Jangada"));
-        assert!(!bloqueado("https://notdoubleclick.net/x"));
-    }
+/// Os sites com os escudos desligados (um por linha).
+pub fn escudos_fora() -> std::collections::HashSet<String> {
+    std::fs::read_to_string(pasta().join("escudos-fora.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+}
+
+pub fn gravar_escudos_fora(v: &std::collections::HashSet<String>) {
+    let mut l: Vec<&String> = v.iter().collect();
+    l.sort();
+    let t: String = l.iter().map(|s| format!("{s}\n")).collect();
+    let _ = std::fs::write(pasta().join("escudos-fora.txt"), t);
 }
