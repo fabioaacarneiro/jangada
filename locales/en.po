@@ -566,3 +566,45 @@ msgstr "Show site shortcuts"
 
 msgid "Mostrar a caixa de busca"
 msgstr "Show the search box"
+
+msgid "a câmera"
+msgstr "the camera"
+
+msgid "o microfone"
+msgstr "the microphone"
+
+msgid "a localização"
+msgstr "the location"
+
+msgid "as notificações"
+msgstr "notifications"
+
+msgid "{} quer usar {}?"
+msgstr "{} wants to use {}?"
+
+msgid "Você decide agora. \"Permitir\" e \"Negar\" valem para este site da próxima vez; \"Só desta vez\" não fica guardado."
+msgstr "You decide now. \"Allow\" and \"Deny\" apply to this site next time; \"Only this time\" is not kept."
+
+msgid "Negar"
+msgstr "Deny"
+
+msgid "Só desta vez"
+msgstr "Only this time"
+
+msgid "Permitir"
+msgstr "Allow"
+
+msgid "Permissões dos sites"
+msgstr "Site permissions"
+
+msgid "Câmera, microfone, localização e notificações que você permitiu ou negou para cada site. A Jangada pergunta antes de cada um e lembra a resposta."
+msgstr "Camera, microphone, location and notifications you allowed or denied for each site. Jangada asks before each one and remembers the answer."
+
+msgid "{} sites com permissões guardadas."
+msgstr "{} sites with saved permissions."
+
+msgid "Esquecer as Permissões"
+msgstr "Forget Permissions"
+
+msgid "Padrão"
+msgstr "Default"

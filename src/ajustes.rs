@@ -180,6 +180,45 @@ pub fn visitar(titulo: &str, url: &str) {
     gravar_lista("historico.tsv", &v);
 }
 
+/// As permissões guardadas dos sites (um por linha: origem, tipo, permitido 1/0).
+fn permissoes_guardadas() -> Vec<(String, String, bool)> {
+    std::fs::read_to_string(pasta().join("permissoes.tsv"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|l| {
+            let mut c = l.split('\t');
+            Some((c.next()?.to_string(), c.next()?.to_string(), c.next()? == "1"))
+        })
+        .collect()
+}
+
+/// A decisão guardada para o site e o tipo (camera, microfone, localizacao, notificacoes):
+/// Some(permitido) ou None (ainda não foi decidido).
+pub fn permissao(origem: &str, tipo: &str) -> Option<bool> {
+    permissoes_guardadas().into_iter().find(|(o, t, _)| o == origem && t == tipo).map(|(_, _, p)| p)
+}
+
+/// Guarda a decisão para o site e o tipo.
+pub fn gravar_permissao(origem: &str, tipo: &str, permitido: bool) {
+    if privada() {
+        return;
+    }
+    let mut v: Vec<(String, String, bool)> = permissoes_guardadas().into_iter().filter(|(o, t, _)| !(o == origem && t == tipo)).collect();
+    v.push((origem.to_string(), tipo.to_string(), permitido));
+    let t: String = v.iter().map(|(o, t, p)| format!("{o}\t{t}\t{}\n", if *p { 1 } else { 0 })).collect();
+    let _ = std::fs::write(pasta().join("permissoes.tsv"), t);
+}
+
+/// Quantos sites têm alguma permissão guardada.
+pub fn quantas_permissoes() -> usize {
+    permissoes_guardadas().len()
+}
+
+/// Esquece todas as permissões dos sites.
+pub fn esquecer_permissoes() {
+    let _ = std::fs::remove_file(pasta().join("permissoes.tsv"));
+}
+
 /// Tira um site do histórico.
 pub fn apagar_do_historico(url: &str) {
     let mut v = historico();

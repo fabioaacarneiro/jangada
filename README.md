@@ -27,6 +27,20 @@ Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
   motor, que expõe um endereço local para controlar o navegador; por segurança, isso precisaria ser
   uma opção explícita de quem programa, e não ligada por padrão.
 
+## Permissões dos sites
+
+Quando um site pede a **câmera**, o **microfone**, a **localização** ou as **notificações**, a Jangada
+pergunta numa janela própria: *Negar*, *Só desta vez* ou *Permitir*. "Permitir" e "Negar" ficam
+guardados para aquele site (Preferências ▸ Privacidade mostra quantos sites têm permissões, e
+"Esquecer as Permissões" apaga tudo). "Só desta vez" vale para a página aberta: ao recarregar, a
+pergunta volta.
+
+- **Câmera e microfone** funcionam (testados com uma câmera virtual).
+- **Localização:** a pergunta funciona, mas a posição vem do serviço de localização do Google, e os
+  builds sem a chave desse serviço não a obtêm. Mesmo permitindo, o site pode esperar até dar tempo
+  esgotado.
+- **Captura da tela e do áudio do computador:** a Jangada não concede.
+
 ## Janela privada
 
 **Arquivo ▸ Nova Janela Privada** (Ctrl+Shift+N) abre uma janela que não deixa rastro: o histórico,

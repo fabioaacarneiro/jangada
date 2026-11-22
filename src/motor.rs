@@ -207,6 +207,11 @@ wrap_app! {
             sw(cl, "no-first-run");
             sw(cl, "no-default-browser-check");
             sw(cl, "disable-default-apps");
+            // Teste (JANGADA_TESTE_MIDIA=1): uma câmera e um microfone falsos, para conferir
+            // os pedidos de permissão sem hardware.
+            if std::env::var_os("JANGADA_TESTE_MIDIA").is_some() {
+                sw(cl, "use-fake-device-for-media-stream");
+            }
             // Sem X11 à vista: o motor não precisa de tela nenhuma.
             if std::env::var_os("DISPLAY").is_none() {
                 val(cl, "ozone-platform", "headless");
@@ -853,6 +858,105 @@ pub fn imprimir(host: &BrowserHost, pasta: &std::path::Path) {
     host.print_to_pdf(Some(&path.to_string_lossy().as_ref().into()), Some(&settings), Some(&mut Pdf::new(true)));
 }
 
+/// Um pedido de permissão de um site, esperando a escolha da pessoa.
+pub enum Permissao {
+    /// Câmera e microfone (getUserMedia): o pedido do motor e os bits pedidos.
+    Midia(MediaAccessCallback, u32),
+    /// Localização e notificações (o aviso do motor): o pedido e os bits.
+    Aviso(PermissionPromptCallback),
+}
+
+thread_local! {
+    /// Os pedidos de permissão à espera da janela de perguntas (um por vez).
+    pub static PERMISSOES: RefCell<Vec<(String, Vec<&'static str>, Permissao)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Os nomes que a pessoa lê para cada permissão (a ordem é a da pergunta).
+/// As chaves de cada permissão (guardadas em permissoes.tsv): camera, microfone,
+/// localizacao, notificacoes.
+fn nomes_midia(bits: u32) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    if bits & (1 << 0) != 0 {
+        v.push("microfone");
+    }
+    if bits & (1 << 1) != 0 {
+        v.push("camera");
+    }
+    // Captura de tela e de áudio do computador: a Jangada não concede.
+    v
+}
+
+fn nomes_aviso(bits: u32) -> Vec<&'static str> {
+    let mut v = Vec::new();
+    if bits & (1 << 8) != 0 {
+        v.push("localizacao");
+    }
+    if bits & (1 << 15) != 0 {
+        v.push("notificacoes");
+    }
+    v
+}
+
+/// O nome de uma permissão numa frase: com o artigo ("a câmera", "o microfone").
+pub fn rotulo_permissao(chave: &str) -> &'static str {
+    match chave {
+        "camera" => "a câmera",
+        "microfone" => "o microfone",
+        "localizacao" => "a localização",
+        _ => "as notificações",
+    }
+}
+
+wrap_permission_handler! {
+    pub struct Permissoes {
+        p: Shared,
+    }
+
+    impl PermissionHandler {
+        /// Câmera e microfone: o que foi guardado para o site, ou a pergunta na janela.
+        fn on_request_media_access_permission(&self, _browser: Option<&mut Browser>, _frame: Option<&mut Frame>, requesting_origin: Option<&CefString>, requested_permissions: u32, callback: Option<&mut MediaAccessCallback>) -> ::std::os::raw::c_int {
+            let Some(cb) = callback else { return 0 };
+            let origem = crate::importar::origem(&s(requesting_origin));
+            let nomes = nomes_midia(requested_permissions);
+            if nomes.is_empty() {
+                cb.cancel();
+                return 1;
+            }
+            // Os dois precisam estar liberados (ou não ter sido decidido).
+            let liberado = |k: &str| crate::ajustes::permissao(&origem, k);
+            let pedidos: Vec<&str> = nomes.clone();
+            if pedidos.iter().all(|k| liberado(k) == Some(true)) {
+                cb.cont(requested_permissions & 0x3);
+                return 1;
+            }
+            if pedidos.iter().any(|k| liberado(k) == Some(false)) {
+                cb.cancel();
+                return 1;
+            }
+            PERMISSOES.with(|p| p.borrow_mut().push((origem, nomes, Permissao::Midia(cb.clone(), requested_permissions & 0x3))));
+            1
+        }
+
+        /// Localização e notificações: o aviso do motor (a pergunta é a da Jangada).
+        fn on_show_permission_prompt(&self, _browser: Option<&mut Browser>, _prompt_id: u64, requesting_origin: Option<&CefString>, requested_permissions: u32, callback: Option<&mut PermissionPromptCallback>) -> ::std::os::raw::c_int {
+            let Some(cb) = callback else { return 0 };
+            let origem = crate::importar::origem(&s(requesting_origin));
+            let nomes = nomes_aviso(requested_permissions);
+            if nomes.is_empty() {
+                cb.cont(PermissionRequestResult::DENY);
+                return 1;
+            }
+            let chave = nomes[0];
+            match crate::ajustes::permissao(&origem, chave) {
+                Some(true) => cb.cont(PermissionRequestResult::ACCEPT),
+                Some(false) => cb.cont(PermissionRequestResult::DENY),
+                None => PERMISSOES.with(|p| p.borrow_mut().push((origem, nomes, Permissao::Aviso(cb.clone())))),
+            }
+            1
+        }
+    }
+}
+
 wrap_client! {
     pub struct Cliente {
         desenho: RenderHandler,
@@ -864,9 +968,13 @@ wrap_client! {
         dialogo: JsdialogHandler,
         achar: FindHandler,
         pedidos: RequestHandler,
+        permissoes: PermissionHandler,
     }
 
     impl Client {
+        fn permission_handler(&self) -> Option<PermissionHandler> {
+            Some(self.permissoes.clone())
+        }
         fn find_handler(&self) -> Option<FindHandler> {
             Some(self.achar.clone())
         }
@@ -911,6 +1019,6 @@ fn livre(path: &std::path::Path) -> std::path::PathBuf {
 pub fn nova_aba(p: &Shared, url: &str) -> bool {
     let window_info = WindowInfo { windowless_rendering_enabled: 1, runtime_style: RuntimeStyle::ALLOY, ..Default::default() };
     let settings = BrowserSettings { windowless_frame_rate: 60, background_color: 0xffff_ffff, ..Default::default() };
-    let mut client = Cliente::new(Desenho::new(p.clone()), Exibicao::new(p.clone()), Carga::new(p.clone()), Vida::new(p.clone()), MenuPagina::new(p.clone()), Baixar::new(p.clone()), Dialogo::new(p.clone()), Achar::new(p.clone()), Pedidos::new());
+    let mut client = Cliente::new(Desenho::new(p.clone()), Exibicao::new(p.clone()), Carga::new(p.clone()), Vida::new(p.clone()), MenuPagina::new(p.clone()), Baixar::new(p.clone()), Dialogo::new(p.clone()), Achar::new(p.clone()), Pedidos::new(), Permissoes::new(p.clone()));
     browser_host_create_browser(Some(&window_info), Some(&mut client), Some(&url.into()), Some(&settings), None, None) == 1
 }

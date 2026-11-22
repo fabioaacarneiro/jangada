@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use ajustes::Ajustes;
-use cef::{ImplBrowser, ImplBrowserHost, ImplCommandLine, ImplCookieManager, ImplFrame, ImplJsdialogCallback};
+use cef::{ImplBrowser, ImplBrowserHost, ImplCommandLine, ImplCookieManager, ImplFrame, ImplJsdialogCallback, ImplMediaAccessCallback, ImplPermissionPromptCallback};
 use glove_config::tr;
 use glove_ui::{
     paint::{draw::*, icons::Glyph, tiny_skia, Color, Fonts},
@@ -1711,6 +1711,16 @@ impl Navegador {
                 ui.space(14.0);
                 ui.label_ex(tr!("Dados guardados"), 12.0, true, tinta());
                 ui.space(4.0);
+                ui.space(10.0);
+                ui.label_ex(tr!("Permissões dos sites"), 12.0, true, tinta());
+                ui.space(4.0);
+                ui.paragraph(&tr!("Câmera, microfone, localização e notificações que você permitiu ou negou para cada site. A Jangada pergunta antes de cada um e lembra a resposta."));
+                ui.horizontal(|ui| {
+                    ui.small(&tr!("{} sites com permissões guardadas.", ajustes::quantas_permissoes()));
+                    if ui.small_button(tr!("Esquecer as Permissões")) {
+                        ajustes::esquecer_permissoes();
+                    }
+                });
                 ui.horizontal(|ui| {
                     if ui.button(tr!("Limpar o Histórico…")) {
                         self.pergunta = 1;
@@ -1989,7 +1999,7 @@ impl App for Navegador {
         // O aviso de baixo some sozinho depois de 5 s.
         self.aviso.as_ref().map(|(_, t)| t.elapsed() < Duration::from_secs(5)).hash(&mut h);
         let assinatura = h.finish();
-        let downloads = motor::DOWNLOADS_MUDOU.with(|m| m.replace(false)) || senhas::PARA_GUARDAR.with(|p| !p.borrow().is_empty()) || self.imp_job.is_some();
+        let downloads = motor::DOWNLOADS_MUDOU.with(|m| m.replace(false)) || senhas::PARA_GUARDAR.with(|p| !p.borrow().is_empty()) || motor::PERMISSOES.with(|p| !p.borrow().is_empty()) || self.imp_job.is_some();
         let mudou = std::mem::take(&mut self.mudou) || self.imp_abrir || self.hist_abrir || self.down_abrir || downloads || assinatura != self.assinatura || carregando;
         self.assinatura = assinatura;
         mudou
@@ -2226,7 +2236,37 @@ impl App for Navegador {
         // alert()/confirm() da página: alerta do Glove (janela própria).
         let dialog = self.aba().and_then(|a| a.p.borrow().dialog.clone());
         let guardar = senhas::PARA_GUARDAR.with(|p| p.borrow().first().cloned());
-        if let (Some((origem, usuario, senha)), None) = (guardar, &dialog) {
+        // Permissões pedidas pelo site (câmera, microfone, localização, notificações): uma
+        // pergunta de cada vez, numa janela de alerta própria. "Permitir" e "Negar" ficam
+        // guardados para o site; "Só desta vez" não.
+        let pedido = motor::PERMISSOES.with(|p| p.borrow().first().map(|(o, n, _)| (o.clone(), n.clone())));
+        if let Some((origem, nomes)) = pedido {
+            let site_ = escudos::site(&origem);
+            let quer = nomes.iter().map(|n| tr(motor::rotulo_permissao(n)).to_string()).collect::<Vec<_>>().join(" e ");
+            let titulo = tr!("{} quer usar {}?", site_, quer);
+            let texto = tr!("Você decide agora. \"Permitir\" e \"Negar\" valem para este site da próxima vez; \"Só desta vez\" não fica guardado.");
+            if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &titulo, &texto, &[tr!("Negar"), tr!("Só desta vez"), tr!("Permitir")]) {
+                let (_, _, pedido) = motor::PERMISSOES.with(|p| p.borrow_mut().remove(0));
+                let permitir = i != 0;
+                if i != 1 {
+                    for n in &nomes {
+                        ajustes::gravar_permissao(&origem, n, permitir);
+                    }
+                }
+                match pedido {
+                    motor::Permissao::Midia(cb, bits) => {
+                        if permitir {
+                            cb.cont(bits);
+                        } else {
+                            cb.cancel();
+                        }
+                    }
+                    motor::Permissao::Aviso(cb) => {
+                        cb.cont(if permitir { cef::PermissionRequestResult::ACCEPT } else { cef::PermissionRequestResult::DENY });
+                    }
+                }
+            }
+        } else if let (Some((origem, usuario, senha)), None) = (guardar, &dialog) {
             let site_ = escudos::site(&origem);
             let quem = if usuario.is_empty() { site_.clone() } else { tr!("{} em {}", usuario, site_) };
             let texto = tr!("A senha fica no chaveiro do sistema, e a Jangada a preenche da próxima vez.");
