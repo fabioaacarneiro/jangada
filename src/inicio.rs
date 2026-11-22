@@ -58,11 +58,43 @@ fn cores(escuro: bool) -> (&'static str, &'static str, &'static str, &'static st
     if escuro { ("#1e1e21", "#2c2c30", "#ececf0", "#9a9aa2", "#3c3c42") } else { ("#f2f2f5", "#ffffff", "#1d1d20", "#7a7a82", "#d6d6dc") }
 }
 
-fn estilo(escuro: bool) -> String {
-    let (fundo, cartao, texto, apagado, borda) = cores(escuro);
+/// O que a pessoa escolheu para a página inicial (Preferências ▸ Página Inicial).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Opcoes {
+    /// "" (o padrão do tema), "cor:#rrggbb" ou "imagem:/caminho/da/imagem.jpg".
+    pub fundo: String,
+    /// Os atalhos dos sites.
+    pub atalhos: bool,
+    /// A caixa de busca.
+    pub busca: bool,
+}
+
+impl Default for Opcoes {
+    fn default() -> Self {
+        Self { fundo: String::new(), atalhos: true, busca: true }
+    }
+}
+
+/// O fundo da página como CSS: a cor escolhida, a imagem (embutida, para a página ser um
+/// arquivo só) ou o padrão do tema (None).
+fn fundo_css(fundo: &str) -> Option<String> {
+    if let Some(c) = fundo.strip_prefix("cor:") {
+        let ok = c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|h| h.is_ascii_hexdigit());
+        return ok.then(|| format!("background:{c}"));
+    }
+    let caminho = fundo.strip_prefix("imagem:")?;
+    // Imagens grandes não cabem bem numa página: até 8 MB, e acima disso fica o padrão.
+    let dados = std::fs::metadata(caminho).ok().filter(|m| m.len() <= 8 << 20).and_then(|_| std::fs::read(caminho).ok())?;
+    let tipo = if caminho.to_lowercase().ends_with(".png") { "png" } else if caminho.to_lowercase().ends_with(".webp") { "webp" } else { "jpeg" };
+    Some(format!("background:url(data:image/{tipo};base64,{}) center/cover fixed no-repeat", base64(&dados)))
+}
+
+fn estilo(escuro: bool, fundo: &str) -> String {
+    let (cor_padrao, cartao, texto, apagado, borda) = cores(escuro);
+    let fundo_bg = fundo_css(fundo).unwrap_or_else(|| format!("background:{cor_padrao}"));
     format!(
         "*{{box-sizing:border-box}}html,body{{margin:0;height:100%}}\
-body{{background:{fundo};color:{texto};font-family:'Inter','DejaVu Sans',system-ui,sans-serif;display:flex;flex-direction:column;align-items:center}}\
+body{{{fundo_bg};color:{texto};font-family:'Inter','DejaVu Sans',system-ui,sans-serif;display:flex;flex-direction:column;align-items:center}}\
 main{{flex:1;display:flex;flex-direction:column;align-items:center;padding-top:9vh;width:100%}}\
 .logo{{width:112px;height:112px}}h1{{font-weight:600;font-size:30px;margin:10px 0 22px;letter-spacing:.2px}}\
 form{{width:min(600px,86vw)}}input{{width:100%;font-size:17px;padding:13px 20px;border-radius:24px;border:1px solid {borda};background:{cartao};color:{texto};outline:none;box-shadow:0 1px 3px rgba(0,0,0,.08)}}\
@@ -84,7 +116,7 @@ fn rodape(fonts: &Fonts) -> String {
 /// Grava a página inicial em `dir` (refeita a cada vez que a Jangada abre: segue o tema,
 /// o idioma, o buscador e os favoritos) e devolve o caminho. Os atalhos são os favoritos
 /// (até 12); sem favoritos, uns sites conhecidos.
-pub fn pagina_inicial(dir: &Path, fonts: &Fonts, escuro: bool, busca: &str, favoritos: &[(String, String)]) -> PathBuf {
+pub fn pagina_inicial(dir: &Path, fonts: &Fonts, escuro: bool, busca: &str, favoritos: &[(String, String)], opc: &Opcoes) -> PathBuf {
     let mut sites = String::new();
     let lista: Vec<(String, String)> = if favoritos.is_empty() {
         ATALHOS.iter().map(|(n, u)| (n.to_string(), u.to_string())).collect()
@@ -101,17 +133,26 @@ pub fn pagina_inicial(dir: &Path, fonts: &Fonts, escuro: bool, busca: &str, favo
             esc(&nome)
         ));
     }
+    // Sem a busca ou sem os atalhos, essas partes simplesmente não vão para a página.
+    let caixa = if opc.busca {
+        format!(
+            "<form onsubmit=\"var q=this.q.value.trim();if(q)location.href='{busca}'+encodeURIComponent(q);return false\"><input name=q placeholder=\"{dica}\" autofocus autocomplete=off></form>",
+            busca = esc(busca),
+            dica = esc(glove_config::tr!("Buscar na web")),
+        )
+    } else {
+        String::new()
+    };
+    let grade = if opc.atalhos { format!("<div class=sites>{sites}</div>") } else { String::new() };
     let html = format!(
         "<!doctype html><html lang=\"{lang}\"><head><meta charset=\"utf-8\"><title>{titulo}</title><style>{css}</style></head><body><main>\
-<img class=logo src=\"{logo}\" alt=\"\"><h1>Jangada</h1>\
-<form onsubmit=\"var q=this.q.value.trim();if(q)location.href='{busca}'+encodeURIComponent(q);return false\"><input name=q placeholder=\"{dica}\" autofocus autocomplete=off></form>\
-<div class=sites>{sites}</div></main>{rodape}</body></html>",
+<img class=logo src=\"{logo}\" alt=\"\"><h1>Jangada</h1>{caixa}{grade}</main>{rodape}</body></html>",
         lang = if glove_config::idioma().starts_with("en") { "en" } else { "pt-BR" },
         titulo = esc(glove_config::tr!("Início")),
-        css = estilo(escuro),
+        css = estilo(escuro, &opc.fundo),
+        caixa = caixa,
+        grade = grade,
         logo = img(fonts, Some(icons::Icon::Jangada), 224),
-        busca = esc(busca),
-        dica = esc(glove_config::tr!("Buscar na web")),
         rodape = rodape(fonts),
     );
     let p = dir.join("inicio.html");
@@ -127,7 +168,7 @@ pub fn pagina_erro(fonts: &Fonts, escuro: bool, url: &str, codigo: &str) -> Stri
 <img class=logo src=\"{logo}\" alt=\"\"><h1>{titulo}</h1><p>{texto}</p><code>{codigo}</code><br>\
 <a class=botao href=\"{url}\">{tentar}</a></div></main>{rodape}</body></html>",
         titulo = esc(glove_config::tr!("Não foi possível abrir a página")),
-        css = estilo(escuro),
+        css = estilo(escuro, ""),
         logo = img(fonts, Some(icons::Icon::Jangada), 224),
         texto = esc(&glove_config::tr!("A Jangada não conseguiu chegar a {}. Confira o endereço e a conexão com a internet.", host)),
         codigo = esc(codigo),
@@ -140,6 +181,17 @@ pub fn pagina_erro(fonts: &Fonts, escuro: bool, url: &str, codigo: &str) -> Stri
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fundo_da_pagina_inicial() {
+        assert_eq!(super::fundo_css("cor:#eceef3").as_deref(), Some("background:#eceef3"));
+        // Cor inválida (não é #rrggbb) não vira CSS.
+        assert!(super::fundo_css("cor:red").is_none());
+        assert!(super::fundo_css("cor:#zzzzzz").is_none());
+        // Imagem inexistente cai no padrão do tema.
+        assert!(super::fundo_css("imagem:/nao/existe.jpg").is_none());
+        assert!(super::fundo_css("").is_none());
+    }
+
     #[test]
     fn base64_igual_ao_padrao() {
         assert_eq!(super::base64(b"Jangada"), "SmFuZ2FkYQ==");

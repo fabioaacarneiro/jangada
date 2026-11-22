@@ -271,6 +271,8 @@ struct Navegador {
     mudou: bool,
     /// Quando a sessão do Google foi conferida (Preferências ▸ Contas).
     google_lido: Instant,
+    /// O caminho da imagem de fundo da página inicial (o que está sendo editado).
+    fundo_imagem: String,
     /// Preferências ▸ Senhas: as guardadas (sem os segredos), a escolhida, a rolagem e a
     /// senha à vista.
     senhas_lista: Option<Vec<chaveiro::Login>>,
@@ -320,7 +322,7 @@ impl Navegador {
 
     /// Refaz a página inicial da Jangada (buscador e favoritos novos).
     fn refazer_inicio(&mut self, fonts: &Fonts) {
-        inicio::pagina_inicial(&self.dados, fonts, self.escuro, self.aj.busca_url(), &self.favoritos);
+        inicio::pagina_inicial(&self.dados, fonts, self.escuro, self.aj.busca_url(), &self.favoritos, &self.aj.opcoes_inicio());
     }
 
     fn abrir(&mut self, url: &str) {
@@ -1570,6 +1572,31 @@ impl Navegador {
                         a.zoom_ok = false;
                     }
                 }
+                ui.space(12.0);
+                ui.label_ex(tr!("Página inicial: fundo"), 12.0, true, tinta());
+                // Cor pronta, ou a imagem pelo caminho dela (a página embute a imagem).
+                let cores = [("", tr!("Padrão")), ("cor:#eceef3", tr!("Cinza claro")), ("cor:#dbe7f7", tr!("Azul claro")), ("cor:#2b2b31", tr!("Grafite"))];
+                let imagem = self.aj.inicio_fundo.starts_with("imagem:");
+                let mut k = cores.iter().position(|c| c.0 == self.aj.inicio_fundo).unwrap_or(if imagem { 4 } else { 0 });
+                let mut nomes_fundo: Vec<String> = cores.iter().map(|c| c.1.to_string()).collect();
+                nomes_fundo.push(tr!("Imagem…").into());
+                if ui.popup(&mut k, &nomes_fundo, 160.0) {
+                    if k < cores.len() {
+                        self.aj.inicio_fundo = cores[k].0.to_string();
+                    } else if !imagem {
+                        self.aj.inicio_fundo = format!("imagem:{}", self.fundo_imagem);
+                    }
+                }
+                if k == 4 {
+                    ui.space(4.0);
+                    if ui.text_field(&mut self.fundo_imagem, 360.0) {
+                        self.aj.inicio_fundo = format!("imagem:{}", self.fundo_imagem.trim());
+                    }
+                    ui.small(&tr!("Caminho de uma imagem no computador (JPG, PNG ou WebP, até 8 MB)."));
+                }
+                ui.space(6.0);
+                ui.checkbox(&mut self.aj.inicio_atalhos, tr!("Mostrar os atalhos dos sites"));
+                ui.checkbox(&mut self.aj.inicio_busca, tr!("Mostrar a caixa de busca"));
             }
             Secao::Contas => {
                 // A sessão do Google: os cookies da conta, conferidos de tempos em tempos.
@@ -1760,7 +1787,7 @@ impl Navegador {
         if self.aj != antes {
             let reabrir = self.aj.placa_de_video != antes.placa_de_video || self.aj.escuro_nas_paginas != antes.escuro_nas_paginas;
             self.reabrir |= reabrir;
-            if self.aj.busca != antes.busca {
+            if self.aj.busca != antes.busca || self.aj.inicio_fundo != antes.inicio_fundo || self.aj.inicio_atalhos != antes.inicio_atalhos || self.aj.inicio_busca != antes.inicio_busca {
                 self.refazer_inicio(ui.fonts);
             }
             self.aj.salvar();
@@ -2327,7 +2354,7 @@ fn main() -> std::process::ExitCode {
     // A página inicial da Jangada (refeita a cada abertura: tema, idioma, buscador, favoritos).
     let escuro = glove_config::Config::load().theme.contains("escuro");
     let inicio_url = match Fonts::load_system() {
-        Some(f) => format!("file://{}", inicio::pagina_inicial(&dados, &f, escuro, aj.busca_url(), &favoritos).display()),
+        Some(f) => format!("file://{}", inicio::pagina_inicial(&dados, &f, escuro, aj.busca_url(), &favoritos, &aj.opcoes_inicio()).display()),
         None => "https://duckduckgo.com/".to_string(),
     };
     // Endereços pedidos (o resto da linha de comando que não é opção).
@@ -2399,6 +2426,7 @@ fn main() -> std::process::ExitCode {
     // Os escudos sobem numa linha à parte (o motor guardado abre na hora).
     escudos::iniciar();
     // As abas da última vez: reabertas já (Preferências) ou guardadas para o menu Histórico.
+    let fundo_imagem = aj.inicio_fundo.strip_prefix("imagem:").unwrap_or("").to_string();
     let sessao = ajustes::sessao();
     let aj_reabrir = aj.reabrir_abas && urls.is_empty();
     let mut nav = Navegador {
@@ -2451,6 +2479,7 @@ fn main() -> std::process::ExitCode {
         down_tabela: TableState::default(),
         mudou: true,
         google_lido: Instant::now() - Duration::from_secs(10),
+        fundo_imagem,
         senhas_lista: None,
         senhas_sel: None,
         senhas_tabela: TableState::default(),

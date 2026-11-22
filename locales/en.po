@@ -542,3 +542,27 @@ msgstr "View Source"
 
 msgid "Ferramentas do Desenvolvedor"
 msgstr "Developer Tools"
+
+msgid "Página inicial: fundo"
+msgstr "Start page: background"
+
+msgid "Cinza claro"
+msgstr "Light gray"
+
+msgid "Azul claro"
+msgstr "Light blue"
+
+msgid "Grafite"
+msgstr "Graphite"
+
+msgid "Imagem…"
+msgstr "Image…"
+
+msgid "Caminho de uma imagem no computador (JPG, PNG ou WebP, até 8 MB)."
+msgstr "Path to an image on this computer (JPG, PNG or WebP, up to 8 MB)."
+
+msgid "Mostrar os atalhos dos sites"
+msgstr "Show site shortcuts"
+
+msgid "Mostrar a caixa de busca"
+msgstr "Show the search box"

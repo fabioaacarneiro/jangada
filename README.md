@@ -74,7 +74,9 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
   última. Ctrl+T abre, Ctrl+W fecha, Ctrl+Shift+T reabre a última fechada, Ctrl+Tab passa; links
   que abrem janela nova viram abas, e o botão do meio (ou Ctrl + clique) abre o link numa aba por
   trás. O botão do meio numa aba a fecha.
-- **Página inicial** própria, com a busca e os atalhos dos sites; **página de erro** própria.
+- **Página inicial** própria, com a busca e os atalhos dos sites; **página de erro** própria. Em
+  Preferências ▸ Geral dá para escolher o fundo (padrão, cinza claro, azul claro, grafite ou uma
+  imagem do computador), e mostrar ou esconder os atalhos e a caixa de busca.
 - **Botão direito:** o menu do Glove, solto, por cima de tudo (abrir o link em nova aba, copiar,
   colar, buscar o texto escolhido).
 - **Downloads** direto na pasta Downloads, com a janela Downloads (Ctrl+J, ou a seta na barra):
