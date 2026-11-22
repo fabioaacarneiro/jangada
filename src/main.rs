@@ -36,6 +36,8 @@ const ACHAR_H: f32 = 32.0;
 const STATUS_H: f32 = 20.0;
 /// A janela das Preferências.
 const JANELA_PREFS: u32 = 1;
+/// Onde se inicia a sessão do Google (volta para a página da conta).
+const GOOGLE_LOGIN: &str = "https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmyaccount.google.com%2F";
 const JANELA_HIST: u32 = 2;
 const JANELA_DOWN: u32 = 3;
 
@@ -159,6 +161,7 @@ struct Aba {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Secao {
     Geral,
+    Contas,
     Busca,
     Privacidade,
     Extensoes,
@@ -233,6 +236,8 @@ struct Navegador {
     down_tabela: TableState,
     /// Algo mudou fora dos eventos da janela (a batida redesenha).
     mudou: bool,
+    /// Quando a sessão do Google foi conferida (Preferências ▸ Contas).
+    google_lido: Instant,
 }
 
 impl Navegador {
@@ -1105,6 +1110,10 @@ impl Navegador {
             match id {
                 "sobre" => self.sobre = true,
                 "reabrir-sessao" => self.reabrir_sessao(),
+                "google" => {
+                    self.abrir(GOOGLE_LOGIN);
+                    self.mudou = true;
+                }
                 "pdf" => {
                     if let Some(h) = self.host() {
                         motor::salvar_pdf(&h, &self.titulo_atual());
@@ -1274,7 +1283,7 @@ impl Navegador {
         let w = ui.c.w;
         ui.c.fill_rect(0.0, 0.0, w, ui.c.h, &solid(ui.theme.body_a));
         ui.space(10.0);
-        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
+        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Contas, tr!("Contas")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
         let nomes: Vec<&str> = secoes.iter().map(|s| s.1).collect();
         let mut i = secoes.iter().position(|s| s.0 == self.secao).unwrap_or(0);
         if ui.tabs(&mut i, &nomes) {
@@ -1323,6 +1332,35 @@ impl Navegador {
                         a.zoom_ok = false;
                     }
                 }
+            }
+            Secao::Contas => {
+                // A sessão do Google: os cookies da conta, conferidos de tempos em tempos.
+                if self.google_lido.elapsed() > Duration::from_secs(2) {
+                    motor::conferir_google();
+                    self.google_lido = Instant::now();
+                }
+                ui.wake_after(Duration::from_millis(500));
+                let logado = motor::GOOGLE.with(|g| g.get());
+                ui.label_ex(tr!("Conta do Google"), 12.0, true, tinta());
+                ui.space(4.0);
+                ui.paragraph(if logado {
+                    tr!("Você está com a sessão aberta numa conta do Google: Gmail, YouTube, Drive e os outros serviços já abrem com ela.")
+                } else {
+                    tr!("Inicie a sessão para usar o Gmail, o YouTube, o Drive e os outros serviços do Google com a sua conta.")
+                });
+                ui.space(6.0);
+                if logado {
+                    if ui.button(tr!("Gerenciar a Conta…")) {
+                        self.abrir("https://myaccount.google.com/");
+                    }
+                    if ui.button(tr!("Sair da Conta do Google")) {
+                        self.abrir("https://accounts.google.com/Logout");
+                    }
+                } else if ui.default_button(tr!("Iniciar Sessão no Google…")) {
+                    self.abrir(GOOGLE_LOGIN);
+                }
+                ui.space(12.0);
+                ui.paragraph(tr!("A sessão fica guardada na Jangada (como nos outros navegadores). A sincronização de favoritos e senhas do Chrome não existe no motor da Jangada."));
             }
             Secao::Busca => {
                 ui.label_ex(tr!("Buscador da barra de endereço e da página inicial"), 12.0, true, tinta());
@@ -1605,7 +1643,12 @@ impl App for Navegador {
         m_hist.push(MenuItem::Separator);
         m_hist.push(MenuItem::new("limpar-historico", tr!("Limpar o Histórico…"), ""));
         vec![
-            Menu::app(vec![MenuItem::new("sobre", tr!("Sobre a Jangada"), ""), MenuItem::Separator, MenuItem::new("preferencias", tr!("Preferências…"), "Ctrl+,")]),
+            Menu::app(vec![
+                MenuItem::new("sobre", tr!("Sobre a Jangada"), ""),
+                MenuItem::Separator,
+                MenuItem::new("preferencias", tr!("Preferências…"), "Ctrl+,"),
+                MenuItem::new("google", tr!("Iniciar Sessão no Google…"), ""),
+            ]),
             Menu::new(tr!("Arquivo"), vec![
                 MenuItem::new("nova-aba", tr!("Nova Aba"), "Ctrl+T"),
                 MenuItem::new("abrir-local", tr!("Abrir Endereço…"), "Ctrl+L"),
@@ -1645,7 +1688,9 @@ impl App for Navegador {
             JANELA_PREFS => return self.preferencias(ui),
             JANELA_HIST => return self.janela_historico(ui),
             JANELA_DOWN => return self.janela_downloads(ui),
-            _ => {}
+            0 => {}
+            // Outra janela (do kit): o navegador só se desenha na principal.
+            _ => return,
         }
         self.escala = ui.c.scale;
         self.escuro = ui.theme.dark;
@@ -1846,8 +1891,10 @@ fn main() -> std::process::ExitCode {
 
     let perfil = dados.join("Perfil");
     let idioma = if glove_config::idioma().starts_with("en") { "en-US" } else { "pt-BR" };
-    // Os sites veem a Jangada como um Chrome (para funcionarem igual) com o nome dela no fim.
-    let produto = format!("Chrome/{}.0.0.0 Jangada/{VERSAO}", cef::sys::CHROME_VERSION_MAJOR);
+    // Os sites veem a Jangada como um Chrome comum: com um nome a mais no fim, o Google
+    // recusa iniciar a sessão ("este navegador pode não ser seguro") e alguns sites
+    // tratam a página como de um navegador desconhecido.
+    let produto = format!("Chrome/{}.0.0.0", cef::sys::CHROME_VERSION_MAJOR);
     let settings = cef::Settings {
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
@@ -1914,6 +1961,7 @@ fn main() -> std::process::ExitCode {
         down_sel: None,
         down_tabela: TableState::default(),
         mudou: true,
+        google_lido: Instant::now() - Duration::from_secs(10),
     };
     if !urls.is_empty() {
         for u in &urls {

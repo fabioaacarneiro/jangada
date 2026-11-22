@@ -49,6 +49,9 @@ Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 - **Preferências** (Ctrl+,), como as do Safari:
   - *Geral:* página inicial (a da Jangada ou um endereço), reabrir as abas da última vez, a barra de
     favoritos e o tamanho padrão das páginas;
+  - *Contas:* **iniciar a sessão no Google** (Gmail, YouTube, Drive e os outros serviços com a sua
+    conta; também no menu Jangada), gerenciar a conta e sair. A sessão fica guardada na Jangada; a
+    sincronização de favoritos e senhas do Chrome não existe no motor dela;
   - *Busca:* DuckDuckGo, Google, Bing, Ecosia, Brave Search ou Startpage;
   - *Privacidade:* bloquear as janelas que as páginas abrem sozinhas, pedir para não rastrear (Não
     Rastrear e GPC), limpar o histórico, apagar cookies e dados dos sites;
@@ -56,6 +59,8 @@ Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
     páginas**. As extensões da loja do Chrome ainda não funcionam: o motor sem janela própria não
     as carrega;
   - *Avançado:* o endereço completo na barra, usar a placa de vídeo e a pasta Downloads.
+- Os sites veem a Jangada como um Chrome comum (o mesmo user agent): assim o Google deixa iniciar
+  a sessão e os sites funcionam igual.
 - Abrir de novo (`jangada endereço`) abre uma aba na janela que já está aberta.
 - No pacote, a Jangada vira o navegador padrão do sistema (`x-www-browser`).
 

@@ -92,6 +92,34 @@ thread_local! {
     pub static IMPRIMIR: RefCell<Option<std::path::PathBuf>> = const { RefCell::new(None) };
     /// Mudou algo nos downloads (o app redesenha).
     pub static DOWNLOADS_MUDOU: Cell<bool> = const { Cell::new(false) };
+    /// Há uma sessão do Google aberta (os cookies da conta existem)? Atualizado por
+    /// `conferir_google`.
+    pub static GOOGLE: Cell<bool> = const { Cell::new(false) };
+}
+
+wrap_cookie_visitor! {
+    pub struct Biscoitos;
+
+    impl CookieVisitor {
+        fn visit(&self, cookie: Option<&Cookie>, _count: ::std::os::raw::c_int, _total: ::std::os::raw::c_int, _delete_cookie: Option<&mut ::std::os::raw::c_int>) -> ::std::os::raw::c_int {
+            if let Some(c) = cookie {
+                let nome = c.name.to_string();
+                if matches!(nome.as_str(), "SID" | "__Secure-1PSID" | "SAPISID" | "__Secure-3PSID") {
+                    GOOGLE.with(|g| g.set(true));
+                    return 0;
+                }
+            }
+            1
+        }
+    }
+}
+
+/// Confere (sem bloquear) se há uma conta do Google com sessão aberta: os cookies de
+/// sessão do Google existem. A resposta chega em `GOOGLE` logo depois.
+pub fn conferir_google() {
+    let Some(m) = cookie_manager_get_global_manager(None) else { return };
+    GOOGLE.with(|g| g.set(false));
+    m.visit_url_cookies(Some(&"https://accounts.google.com/".into()), 1, Some(&mut Biscoitos::new()));
 }
 
 /// Um download: o nome, onde fica, quanto chegou e o estado.

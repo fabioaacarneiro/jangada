@@ -362,3 +362,27 @@ msgstr "Title"
 
 msgid "{} sites"
 msgstr "{} sites"
+
+msgid "A sessão fica guardada na Jangada (como nos outros navegadores). A sincronização de favoritos e senhas do Chrome não existe no motor da Jangada."
+msgstr "The session is kept in Jangada (as in other browsers). Chrome's bookmark and password sync is not available in Jangada's engine."
+
+msgid "Conta do Google"
+msgstr "Google Account"
+
+msgid "Contas"
+msgstr "Accounts"
+
+msgid "Gerenciar a Conta…"
+msgstr "Manage Account…"
+
+msgid "Iniciar Sessão no Google…"
+msgstr "Sign In to Google…"
+
+msgid "Inicie a sessão para usar o Gmail, o YouTube, o Drive e os outros serviços do Google com a sua conta."
+msgstr "Sign in to use Gmail, YouTube, Drive and other Google services with your account."
+
+msgid "Sair da Conta do Google"
+msgstr "Sign Out of Google"
+
+msgid "Você está com a sessão aberta numa conta do Google: Gmail, YouTube, Drive e os outros serviços já abrem com ela."
+msgstr "You are signed in to a Google account: Gmail, YouTube, Drive and the other services open with it."
