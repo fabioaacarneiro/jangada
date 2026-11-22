@@ -2,7 +2,7 @@
 name = "jangada"
 # Jangada, o navegador do Glove OS: o motor do Chromium (CEF) desenhando a página dentro
 # de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
-version = "1.6.0"
+version = "1.7.0"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"

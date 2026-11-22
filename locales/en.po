@@ -533,3 +533,12 @@ msgstr "New Private Window"
 
 msgid "Janela privada: nada fica guardado"
 msgstr "Private window: nothing is kept"
+
+msgid "Inspecionar Elemento"
+msgstr "Inspect Element"
+
+msgid "Ver Código-Fonte"
+msgstr "View Source"
+
+msgid "Ferramentas do Desenvolvedor"
+msgstr "Developer Tools"

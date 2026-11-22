@@ -19,6 +19,14 @@ Feita para computadores modestos:
 
 Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 
+## Desenvolvimento web
+
+- **Ver código-fonte** (Ctrl+U, ou no menu Visualizar): abre o HTML da página numa aba.
+- **Ferramentas do desenvolvedor (inspetor, console e rede): ainda não.** A janela de ferramentas do
+  motor não aparece no modo sem janela da Jangada. A saída possível é a porta de depuração remota do
+  motor, que expõe um endereço local para controlar o navegador; por segurança, isso precisaria ser
+  uma opção explícita de quem programa, e não ligada por padrão.
+
 ## Janela privada
 
 **Arquivo ▸ Nova Janela Privada** (Ctrl+Shift+N) abre uma janela que não deixa rastro: o histórico,

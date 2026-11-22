@@ -445,6 +445,13 @@ impl Navegador {
         let frame = || b.as_ref().and_then(|b| b.focused_frame().or_else(|| b.main_frame()));
         match combo {
             "Ctrl+T" => self.nova_aba(),
+            "Ctrl+U" => {
+                // O código-fonte da página (o próprio motor mostra o texto).
+                let u = self.url_atual();
+                if !u.is_empty() && !u.starts_with("data:") {
+                    self.abrir(&format!("view-source:{u}"));
+                }
+            }
             "Ctrl+Shift+N" => {
                 // Outra janela (um processo), com o armazenamento só em memória.
                 if let Ok(exe) = std::env::current_exe() {
@@ -1094,7 +1101,7 @@ impl Navegador {
         let keys = ui.keys().to_vec();
         if self.barra_foco || std::mem::take(&mut self.teclas_da_barra) {
             for k in keys {
-                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N") {
+                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N" | "Ctrl+U") {
                     self.atalho(&k.combo, false);
                 }
             }
@@ -1248,6 +1255,9 @@ impl Navegador {
                     }
                 }
                 "importar" => self.imp_abrir = true,
+                "codigo" => {
+                    self.atalho("Ctrl+U", false);
+                }
                 "esc-site" => {
                     escudos::alternar_site(&escudos::site(&self.url_atual()));
                     self.atalho("Ctrl+R", false);
@@ -2051,6 +2061,8 @@ impl App for Navegador {
                 MenuItem::new("real", tr!("Tamanho Padrão"), "Ctrl+0"),
                 MenuItem::Separator,
                 MenuItem::new("downloads", tr!("Mostrar os Downloads"), "Ctrl+J"),
+                MenuItem::Separator,
+                MenuItem::new("codigo", tr!("Ver Código-Fonte"), "Ctrl+U"),
             ]),
             Menu::new(tr!("Histórico"), m_hist),
             Menu::new(tr!("Favoritos"), m_favs),
