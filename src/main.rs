@@ -445,6 +445,12 @@ impl Navegador {
         let frame = || b.as_ref().and_then(|b| b.focused_frame().or_else(|| b.main_frame()));
         match combo {
             "Ctrl+T" => self.nova_aba(),
+            "Ctrl+Shift+N" => {
+                // Outra janela (um processo), com o armazenamento só em memória.
+                if let Ok(exe) = std::env::current_exe() {
+                    let _ = std::process::Command::new(exe).arg("--privada").spawn();
+                }
+            }
             "Ctrl+W" => self.fechar(self.atual),
             "Ctrl+L" | "F6" => self.focar_barra = true,
             "Ctrl+F" => {
@@ -680,8 +686,8 @@ impl Navegador {
             let (_, enter) = ui.text_field_in(fr, &mut self.barra, autofocus);
             self.barra_foco = ui.has_focus();
             if self.barra.is_empty() {
-                let dica = tr!("Buscar ou digitar um endereço");
-                ui.fonts.draw(ui.c, dica, fr.x + 8.0, fr.y + CAMPO_H / 2.0 + 4.5, 12.5, false, rgba(150, 150, 156, 255));
+                let dica = if ajustes::privada() { tr!("Janela privada: nada fica guardado").to_string() } else { tr!("Buscar ou digitar um endereço").to_string() };
+                ui.fonts.draw(ui.c, &dica, fr.x + 8.0, fr.y + CAMPO_H / 2.0 + 4.5, 12.5, false, rgba(150, 150, 156, 255));
             }
             if self.barra_foco && ui.keys().iter().any(|k| k.key == glove_ui::ui::Key::Escape) {
                 self.barra_foco = false;
@@ -1088,7 +1094,7 @@ impl Navegador {
         let keys = ui.keys().to_vec();
         if self.barra_foco || std::mem::take(&mut self.teclas_da_barra) {
             for k in keys {
-                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J") {
+                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N") {
                     self.atalho(&k.combo, false);
                 }
             }
@@ -1236,6 +1242,11 @@ impl Navegador {
             match id {
                 "sobre" => self.sobre = true,
                 "reabrir-sessao" => self.reabrir_sessao(),
+                "nova-privada" => {
+                    if let Ok(exe) = std::env::current_exe() {
+                        let _ = std::process::Command::new(exe).arg("--privada").spawn();
+                    }
+                }
                 "importar" => self.imp_abrir = true,
                 "esc-site" => {
                     escudos::alternar_site(&escudos::site(&self.url_atual()));
@@ -2011,6 +2022,7 @@ impl App for Navegador {
             ]),
             Menu::new(tr!("Arquivo"), vec![
                 MenuItem::new("nova-aba", tr!("Nova Aba"), "Ctrl+T"),
+                MenuItem::new("nova-privada", tr!("Nova Janela Privada"), "Ctrl+Shift+N"),
                 MenuItem::new("abrir-local", tr!("Abrir Endereço…"), "Ctrl+L"),
                 MenuItem::Separator,
                 MenuItem::new("importar", tr!("Importar de Outro Navegador…"), ""),
@@ -2170,7 +2182,8 @@ impl App for Navegador {
         }
         // O título da janela segue a página.
         let titulo = self.titulo_atual();
-        ui.set_title(if titulo.is_empty() { "Jangada" } else { &titulo });
+        let nome = if ajustes::privada() { "Jangada Privada" } else { "Jangada" };
+        ui.set_title(&if titulo.is_empty() { nome.to_string() } else { format!("{titulo} — {nome}") });
         // alert()/confirm() da página: alerta do Glove (janela própria).
         let dialog = self.aba().and_then(|a| a.p.borrow().dialog.clone());
         let guardar = senhas::PARA_GUARDAR.with(|p| p.borrow().first().cloned());
@@ -2308,16 +2321,41 @@ fn main() -> std::process::ExitCode {
     // Endereços pedidos (o resto da linha de comando que não é opção).
     let urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("--")).map(|a| endereco(&a, &inicio_url, aj.busca_url())).collect();
     // Já aberta: manda os endereços para ela e sai.
+    // A janela privada é outra janela: não manda os endereços para a normal e não a substitui.
+    let privada = std::env::args().any(|a| a == "--privada");
+    ajustes::PRIVADA.store(privada, std::sync::atomic::Ordering::Relaxed);
     let sock = socket_path();
-    if let Ok(mut c) = UnixStream::connect(&sock) {
-        let text = if urls.is_empty() { "\n".to_string() } else { urls.join("\n") };
-        let _ = c.write_all(text.as_bytes());
-        return 0.into();
+    if !privada {
+        if let Ok(mut c) = UnixStream::connect(&sock) {
+            let text = if urls.is_empty() { "\n".to_string() } else { urls.join("\n") };
+            let _ = c.write_all(text.as_bytes());
+            return 0.into();
+        }
+        let _ = std::fs::remove_file(&sock);
     }
-    let _ = std::fs::remove_file(&sock);
-    let servidor = UnixListener::bind(&sock).ok().inspect(|l| {
-        let _ = l.set_nonblocking(true);
-    });
+    // A pasta temporária da janela privada (na memória, apagada ao fechar).
+    let tmp_privada = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("jangada-privada-{}", std::process::id()));
+    if privada {
+        // As pastas de janelas privadas que caíram (sem fechar direito) saem agora.
+        if let Some(base) = tmp_privada.parent() {
+            for e in std::fs::read_dir(base).into_iter().flatten().flatten() {
+                let nome = e.file_name().to_string_lossy().to_string();
+                if let Some(pid) = nome.strip_prefix("jangada-privada-").and_then(|n| n.parse::<u32>().ok()) {
+                    if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
+                        let _ = std::fs::remove_dir_all(e.path());
+                    }
+                }
+            }
+        }
+        let _ = std::fs::create_dir_all(&tmp_privada);
+    }
+    let servidor = if privada {
+        None
+    } else {
+        UnixListener::bind(&sock).ok().inspect(|l| {
+            let _ = l.set_nonblocking(true);
+        })
+    };
 
     let perfil = dados.join("Perfil");
     let idioma = if glove_config::idioma().starts_with("en") { "en-US" } else { "pt-BR" };
@@ -2329,8 +2367,11 @@ fn main() -> std::process::ExitCode {
         windowless_rendering_enabled: 1,
         external_message_pump: 1,
         no_sandbox: (std::env::var_os("JANGADA_SEM_SANDBOX").is_some()) as i32,
-        root_cache_path: dados.to_string_lossy().as_ref().into(),
-        cache_path: perfil.to_string_lossy().as_ref().into(),
+        // Privada: a pasta do motor fica no tmpfs (XDG_RUNTIME_DIR, na memória) e é apagada ao
+        // fechar; o perfil não tem caminho nenhum (cookies e senhas só na memória).
+        root_cache_path: if privada { tmp_privada.to_string_lossy().as_ref().into() } else { dados.to_string_lossy().as_ref().into() },
+        cache_path: if privada { "".into() } else { perfil.to_string_lossy().as_ref().into() },
+        log_file: if privada { tmp_privada.join("motor.log").to_string_lossy().as_ref().into() } else { "".into() },
         persist_session_cookies: 1,
         locale: idioma.into(),
         accept_language_list: if idioma == "pt-BR" { "pt-BR,pt,en-US,en".into() } else { "en-US,en".into() },
@@ -2433,6 +2474,10 @@ fn main() -> std::process::ExitCode {
         std::thread::sleep(Duration::from_millis(10));
     }
     cef::shutdown();
-    let _ = std::fs::remove_file(&sock);
+    if !privada {
+        let _ = std::fs::remove_file(&sock);
+    } else {
+        let _ = std::fs::remove_dir_all(&tmp_privada);
+    }
     if r.is_err() { 1.into() } else { 0.into() }
 }

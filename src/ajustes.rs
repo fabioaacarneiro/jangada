@@ -128,7 +128,18 @@ fn ler_lista(nome: &str) -> Vec<(String, String)> {
         .collect()
 }
 
+/// Janela privada (`--privada`): nada do que é visitado ou guardado como uso (favoritos,
+/// histórico, abas da última vez) é gravado. Ajustes e a própria escolha de escudos valem.
+pub static PRIVADA: AtomicBool = AtomicBool::new(false);
+
+pub fn privada() -> bool {
+    PRIVADA.load(Ordering::Relaxed)
+}
+
 fn gravar_lista(nome: &str, v: &[(String, String)]) {
+    if privada() {
+        return;
+    }
     let t: String = v.iter().map(|(t, u)| format!("{}\t{}\n", t.replace(['\t', '\n'], " "), u.replace(['\t', '\n'], ""))).collect();
     let _ = std::fs::write(pasta().join(nome), t);
 }

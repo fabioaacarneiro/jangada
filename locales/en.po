@@ -527,3 +527,9 @@ msgstr "{} passwords could not be decrypted."
 
 msgid "Pesquisar"
 msgstr "Search"
+
+msgid "Nova Janela Privada"
+msgstr "New Private Window"
+
+msgid "Janela privada: nada fica guardado"
+msgstr "Private window: nothing is kept"

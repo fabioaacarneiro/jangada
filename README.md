@@ -19,6 +19,15 @@ Feita para computadores modestos:
 
 Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 
+## Janela privada
+
+**Arquivo ▸ Nova Janela Privada** (Ctrl+Shift+N) abre uma janela que não deixa rastro: o histórico,
+os favoritos, as abas da última vez e as senhas não são gravados, e os cookies e o armazenamento dos
+sites ficam só na memória, sem perfil em disco. Ao fechar, a pasta temporária dela (em
+`XDG_RUNTIME_DIR`, que fica na memória) é apagada. Não oferece para guardar senhas nem as preenche.
+O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro). Uma janela privada
+é um processo à parte, então ela não se mistura com a normal.
+
 ## Escudos, senhas e importar
 
 - **Escudos** (como os do Brave, com o mesmo motor de bloqueio dele, o `adblock`): anúncios e

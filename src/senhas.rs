@@ -35,7 +35,7 @@ fn js_str(t: &str) -> String {
 /// O script da página (o de cima): pede o preenchimento quando há campo de senha e avisa
 /// os envios com senha. None para páginas que não são da web.
 pub fn script_da_pagina(url: &str) -> Option<String> {
-    if !ligado() || !url.starts_with("http") {
+    if !ligado() || crate::ajustes::privada() || !url.starts_with("http") {
         return None;
     }
     let m = js_str(marca());
@@ -81,7 +81,7 @@ pub fn script_preencher(origem: &str) -> Option<String> {
 /// Um envio com senha: entra na fila da pergunta, se for novo (outra senha, outro
 /// usuário) e se o site não está em "Nunca".
 pub fn enviado(origem: &str, usuario: &str, senha: &str) {
-    if crate::ajustes::nunca_guardar().contains(origem) {
+    if crate::ajustes::privada() || crate::ajustes::nunca_guardar().contains(origem) {
         return;
     }
     if let Ok(c) = crate::chaveiro::Chaveiro::abrir() {
