@@ -11,13 +11,14 @@ no visual clássico ou no Moderno (claro e escuro).
 
 Feita para computadores modestos:
 
-- sem o processo da placa de vídeo: a página é desenhada pelo processador e copiada para a janela,
-  só nas partes que mudaram (passar o mouse ou um cursor piscando não recopia a página inteira);
+- a placa de vídeo desenha as páginas e só as partes que mudaram são copiadas para a janela
+  (passar o mouse ou um cursor piscando não recopia a página inteira);
 - a janela só é refeita quando algo muda (parada, a Jangada quase não gasta processador);
 - no máximo 4 processos de página, sem o cache de voltar (páginas inteiras na memória) e sem rede
   de fundo (atualizações de componentes, tradução, sugestões).
 
-Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
+Para desenhar só com o processador (placa de vídeo com problema): desmarque *Usar a placa de
+vídeo* em Preferências ▸ Avançado, ou abra com `JANGADA_SEM_GPU=1 jangada`.
 
 ## Desenvolvimento web
 

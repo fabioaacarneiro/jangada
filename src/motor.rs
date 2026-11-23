@@ -185,14 +185,15 @@ wrap_app! {
             let Some(cl) = command_line else { return };
             let sw = |cl: &mut CommandLine, n: &str| cl.append_switch(Some(&n.into()));
             let val = |cl: &mut CommandLine, n: &str, v: &str| cl.append_switch_with_value(Some(&n.into()), Some(&v.into()));
-            // Leve para máquinas fracas: sem o processo da placa de vídeo (a página é
-            // desenhada pelo processador e copiada para a janela); poucos processos de
-            // página; sem o cache de voltar (páginas inteiras guardadas na memória).
+            // A placa de vídeo desenha as páginas (desligável nas Preferências, para placas
+            // com problema: aí o processador desenha e a página é copiada para a janela);
+            // poucos processos de página; sem o cache de voltar (páginas inteiras na memória).
             let aj = crate::ajustes::Ajustes::carregar();
             if aj.escuro_nas_paginas {
                 val(cl, "enable-features", "WebContentsForceDark");
             }
-            if std::env::var_os("JANGADA_GPU").is_none() && !aj.placa_de_video {
+            let gpu = if std::env::var_os("JANGADA_SEM_GPU").is_some() { false } else { std::env::var_os("JANGADA_GPU").is_some() || aj.placa_de_video };
+            if !gpu {
                 sw(cl, "disable-gpu");
                 sw(cl, "disable-gpu-compositing");
             }

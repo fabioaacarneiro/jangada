@@ -39,7 +39,8 @@ pub struct Ajustes {
     pub cookies_terceiros: bool,
     /// Oferecer para guardar as senhas e preencher as guardadas.
     pub senhas: bool,
-    /// Avançado.
+    /// Avançado. Usar a placa de vídeo (o padrão): páginas pesadas, como o feed das
+    /// redes sociais, ficam muito mais leves. Desligada, o processador desenha tudo.
     pub placa_de_video: bool,
     pub endereco_completo: bool,
     /// Zoom das páginas (nível do motor: 0 = 100%).
@@ -54,7 +55,7 @@ pub struct Ajustes {
 
 impl Default for Ajustes {
     fn default() -> Self {
-        Self { inicio: String::new(), reabrir_abas: false, busca: 0, barra_favoritos: true, bloqueador: true, nao_rastrear: true, escuro_nas_paginas: false, bloquear_janelas: true, cookies_terceiros: true, senhas: true, placa_de_video: false, endereco_completo: false, zoom: 0.0, inicio_fundo: String::new(), inicio_atalhos: true, inicio_busca: true, ferramentas_dev: false }
+        Self { inicio: String::new(), reabrir_abas: false, busca: 0, barra_favoritos: true, bloqueador: true, nao_rastrear: true, escuro_nas_paginas: false, bloquear_janelas: true, cookies_terceiros: true, senhas: true, placa_de_video: true, endereco_completo: false, zoom: 0.0, inicio_fundo: String::new(), inicio_atalhos: true, inicio_busca: true, ferramentas_dev: false }
     }
 }
 
@@ -87,7 +88,9 @@ impl Ajustes {
                 "bloquear_janelas" => a.bloquear_janelas = sim(v),
                 "cookies_terceiros" => a.cookies_terceiros = sim(v),
                 "senhas" => a.senhas = sim(v),
-                "placa_de_video" => a.placa_de_video = sim(v),
+                // Chave nova: até a 1.12 o padrão era desligada e ficou gravado "nao" para
+                // quem salvou as preferências; assim todos passam ao padrão novo (ligada).
+                "usar_placa_de_video" => a.placa_de_video = sim(v),
                 "endereco_completo" => a.endereco_completo = sim(v),
                 "zoom" => a.zoom = v.parse().unwrap_or(0.0),
                 "inicio_fundo" => a.inicio_fundo = v.to_string(),
@@ -103,7 +106,7 @@ impl Ajustes {
     pub fn salvar(&self) {
         let b = |v: bool| if v { "sim" } else { "nao" };
         let t = format!(
-            "# Preferências da Jangada (Jangada ▸ Preferências…)\ninicio = {}\nreabrir_abas = {}\nbusca = {}\nbarra_favoritos = {}\nbloqueador = {}\nnao_rastrear = {}\nescuro_nas_paginas = {}\nbloquear_janelas = {}\ncookies_terceiros = {}\nsenhas = {}\nplaca_de_video = {}\nendereco_completo = {}\nzoom = {}\ninicio_fundo = {}\ninicio_atalhos = {}\ninicio_busca = {}\nferramentas_dev = {}\n",
+            "# Preferências da Jangada (Jangada ▸ Preferências…)\ninicio = {}\nreabrir_abas = {}\nbusca = {}\nbarra_favoritos = {}\nbloqueador = {}\nnao_rastrear = {}\nescuro_nas_paginas = {}\nbloquear_janelas = {}\ncookies_terceiros = {}\nsenhas = {}\nusar_placa_de_video = {}\nendereco_completo = {}\nzoom = {}\ninicio_fundo = {}\ninicio_atalhos = {}\ninicio_busca = {}\nferramentas_dev = {}\n",
             self.inicio, b(self.reabrir_abas), self.busca, b(self.barra_favoritos), b(self.bloqueador), b(self.nao_rastrear), b(self.escuro_nas_paginas), b(self.bloquear_janelas), b(self.cookies_terceiros), b(self.senhas), b(self.placa_de_video), b(self.endereco_completo), self.zoom, self.inicio_fundo, b(self.inicio_atalhos), b(self.inicio_busca), b(self.ferramentas_dev)
         );
         let _ = std::fs::write(pasta().join("ajustes.conf"), t);

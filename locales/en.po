@@ -66,8 +66,8 @@ msgstr "New Tab"
 msgid "Não foi possível abrir a página"
 msgstr "The page could not be opened"
 
-msgid "O navegador do Glove OS. Motor: Chromium {} (CEF). Leve para computadores modestos: sem o processo da placa de vídeo e sem nada rodando de fundo."
-msgstr "The Glove OS browser. Engine: Chromium {} (CEF). Light for modest computers: no GPU process and nothing running in the background."
+msgid "O navegador do Glove OS. Motor: Chromium {} (CEF). Leve: a placa de vídeo desenha as páginas e nada fica rodando de fundo."
+msgstr "The Glove OS browser. Engine: Chromium {} (CEF). Light: the GPU draws the pages and nothing runs in the background."
 
 msgid "Recarregar"
 msgstr "Reload"

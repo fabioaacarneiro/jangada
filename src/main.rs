@@ -1,7 +1,7 @@
 //! Jangada: o navegador do Glove OS. O motor é o do Chromium (CEF: os recursos da web de
 //! hoje); a janela, as abas, a barra de endereço, as Preferências e as páginas da própria
 //! Jangada (início, erro) são do Glove, no visual clássico ou no moderno. Feita para pesar
-//! pouco: sem o processo da placa de vídeo, poucos processos de página e nada de fundo.
+//! pouco: poucos processos de página e nada de fundo.
 //!
 //!   jangada [ENDEREÇO…]   abre os endereços (numa janela que já esteja aberta, se houver)
 
@@ -2473,7 +2473,7 @@ impl App for Navegador {
                 }
             }
         } else if self.sobre {
-            let texto = tr!("O navegador do Glove OS. Motor: Chromium {} (CEF). Leve para computadores modestos: sem o processo da placa de vídeo e sem nada rodando de fundo.", cef::sys::CHROME_VERSION_MAJOR);
+            let texto = tr!("O navegador do Glove OS. Motor: Chromium {} (CEF). Leve: a placa de vídeo desenha as páginas e nada fica rodando de fundo.", cef::sys::CHROME_VERSION_MAJOR);
             if ui.alert(glove_ui::AlertKind::Note, &format!("Jangada {VERSAO}"), &texto, &[tr!("OK")]).is_some() {
                 self.sobre = false;
             }
