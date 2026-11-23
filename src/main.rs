@@ -2115,14 +2115,19 @@ fn copiar_texto(t: &str) {
 
 impl App for Navegador {
     fn tick(&self) -> Option<Duration> {
-        // O motor pede quando quer trabalhar; com algo acontecendo, quadros a ~60/s.
-        let pedido = motor::BOMBA.with(|b| b.get()) as u64;
+        // O motor pede quando quer trabalhar: atende na hora (rolando a página, cada passo
+        // — o evento, a página, o quadro — esperava o próximo tique de 16 ms, fora do
+        // compasso da tela, e a rolagem dava trancos). Sem pedido, a batida de sempre.
+        let pedido = motor::BOMBA.load(std::sync::atomic::Ordering::Relaxed);
         let mexendo = self.ativo.elapsed() < Duration::from_secs(2) || self.abas.iter().any(|a| a.p.borrow().loading);
-        let ms = if mexendo { 16 } else { pedido.clamp(16, 120) };
+        let teto = if mexendo { 16 } else { 120 };
+        let ms = if pedido < 0 { teto } else { (pedido as u64).clamp(1, teto) };
         Some(Duration::from_millis(ms))
     }
 
     fn on_tick(&mut self) {
+        // O pedido foi atendido; o motor avisa de novo (durante o trabalho) se quiser mais.
+        motor::BOMBA.store(-1, std::sync::atomic::Ordering::Relaxed);
         cef::do_message_loop_work();
         if let Some(rx) = &self.dev_rx {
             match rx.try_recv() {

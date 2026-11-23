@@ -81,12 +81,15 @@ pub struct Contexto {
 
 pub type Shared = StdRc<RefCell<Pagina>>;
 
+/// Quando o motor quer trabalhar de novo (ms; 0 = já; -1 = não pediu). O CEF avisa de
+/// qualquer linha de execução: por isso um atômico (num thread_local, os pedidos das
+/// outras linhas se perdiam).
+pub static BOMBA: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+
 thread_local! {
     /// Endereços que pediram aba nova (target=_blank, window.open) e se ela abre por
     /// trás (botão do meio, Ctrl + clique).
     pub static NOVAS_ABAS: RefCell<Vec<(String, bool)>> = const { RefCell::new(Vec::new()) };
-    /// Quando o motor quer trabalhar de novo (ms; o CEF avisa).
-    pub static BOMBA: Cell<i64> = const { Cell::new(0) };
     /// Avisos para a barra de baixo (downloads).
     pub static AVISOS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Os downloads desta vez (a janela Downloads), do mais velho para o mais novo.
@@ -196,6 +199,12 @@ wrap_app! {
             if !gpu {
                 sw(cl, "disable-gpu");
                 sw(cl, "disable-gpu-compositing");
+            } else if std::env::var_os("DISPLAY").is_none() {
+                // Sem X11 (a sessão Wayland do Glove) o motor fica sem tela, e aí o EGL não
+                // acha configuração e a placa nunca subia (tudo voltava ao processador em
+                // silêncio). O ANGLE sobre o Vulkan sobe sem tela: rasterização, composição,
+                // WebGL e decodificação de vídeo pela placa.
+                val(cl, "use-angle", "vulkan");
             }
             // A porta de depuração aberta: o inspetor que vem no motor (devtools://) pode se
             // ligar a ela numa aba da Jangada.
@@ -288,7 +297,9 @@ wrap_browser_process_handler! {
         }
 
         fn on_schedule_message_pump_work(&self, delay_ms: i64) {
-            BOMBA.with(|b| b.set(delay_ms.max(0)));
+            // O pedido mais cedo vale (vários podem chegar antes do próximo tique).
+            let d = delay_ms.max(0);
+            let _ = BOMBA.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |v| Some(if v < 0 { d } else { v.min(d) }));
         }
     }
 }
