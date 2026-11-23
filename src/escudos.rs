@@ -227,21 +227,25 @@ pub fn script_da_pagina(aba: i32, url: &str) -> Option<String> {
     } else {
         format!("{}{{display:none!important}}", r.hide_selectors.iter().cloned().collect::<Vec<_>>().join(","))
     };
-    let generico = if r.generichide {
-        String::new()
-    } else {
-        format!(
-            "var visto={{}};function ler(){{var c=[],i=[];document.querySelectorAll('[class],[id]').forEach(function(e){{if(e.id&&!visto['#'+e.id]){{visto['#'+e.id]=1;i.push(e.id)}}if(e.classList)e.classList.forEach(function(k){{if(!visto['.'+k]){{visto['.'+k]=1;c.push(k)}}}})}});if(c.length||i.length)console.debug({}+c.join(' ')+'\\u0002'+i.join(' '))}}\
-ler();var t=null;new MutationObserver(function(){{if(t)return;t=setTimeout(function(){{t=null;ler()}},700)}}).observe(document.documentElement,{{childList:true,subtree:true}});",
-            js_str(MARCA)
-        )
-    };
+    // Só os elementos que chegaram (num feed infinito, ler a página inteira a cada 0,7 s
+    // travava o navegador: 7 s travado a cada 45 s de rolagem num teste), aos poucos,
+    // quando o navegador está livre.
+    let generico = if r.generichide { String::new() } else { GENERICO.replace("@MARCA@", &js_str(MARCA)) };
     Some(format!(
         "(function(){{if(window.__jangadaEscudos)return;window.__jangadaEscudos=1;var st=document.createElement('style');st.id='__jangada_escudos';st.textContent={};(document.head||document.documentElement).appendChild(st);{}}})();",
         js_str(&css),
         generico
     ))
 }
+
+/// A leitura das classes e ids novos da página (os filtros genéricos dos escudos). Cada
+/// elemento que chega entra numa fila, lida quando o navegador está livre
+/// (`requestIdleCallback`); o que é novo vai para a Jangada pelo console.
+const GENERICO: &str = r#"var visto={},fila=[document.documentElement],agendado=false;
+function olhar(e,c,i){if(e.id&&!visto['#'+e.id]){visto['#'+e.id]=1;i.push(e.id)}var l=e.classList;if(l)for(var k=0;k<l.length;k++){var x=l[k];if(!visto['.'+x]){visto['.'+x]=1;c.push(x)}}}
+function processar(p){var c=[],i=[];while(fila.length&&(!p||p.didTimeout||p.timeRemaining()>2)){var e=fila.shift();if(!e.isConnected)continue;olhar(e,c,i);var d=e.querySelectorAll('[class],[id]');for(var k=0;k<d.length;k++)olhar(d[k],c,i)}agendado=false;if(fila.length)agendar();if(c.length||i.length)console.debug(@MARCA@+c.join(' ')+''+i.join(' '))}
+function agendar(){if(agendado)return;agendado=true;(window.requestIdleCallback||function(f){return setTimeout(f,200)})(processar,{timeout:1500})}
+agendar();new MutationObserver(function(rs){for(var r=0;r<rs.length;r++){var a=rs[r].addedNodes;for(var k=0;k<a.length;k++)if(a[k].nodeType==1)fila.push(a[k])}agendar()}).observe(document.documentElement,{childList:true,subtree:true});"#;
 
 /// As classes e ids que a página mandou (o texto depois da `MARCA`): o estilo genérico a
 /// acrescentar, ou None.
@@ -253,7 +257,9 @@ pub fn cosmetico_generico(aba: i32, msg: &str) -> Option<String> {
         return None;
     }
     let css = format!("{}{{display:none!important}}", sel.join(","));
-    Some(format!("(function(){{var st=document.getElementById('__jangada_escudos');if(st)st.textContent+={};}})();", js_str(&css)))
+    // Numa folha nova: regravar a folha toda a cada resposta fazia o navegador refazer o
+    // estilo da página inteira (e a folha só crescia).
+    Some(format!("(function(){{var st=document.createElement('style');st.className='__jangada_escudos';st.textContent={};(document.head||document.documentElement).appendChild(st);}})();", js_str(&css)))
 }
 
 #[cfg(test)]
