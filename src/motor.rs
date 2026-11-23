@@ -8,6 +8,9 @@ use std::rc::Rc as StdRc;
 
 use cef::*;
 
+/// A porta local de depuração (0 = fechada): `--depurar` ou Preferências ▸ Avançado.
+pub static DEPURACAO: std::sync::atomic::AtomicU16 = std::sync::atomic::AtomicU16::new(0);
+
 /// O que uma aba sabe da página (escrito pelo motor, lido pelo app).
 pub struct Pagina {
     /// Área da página na janela, em pontos, e a escala da tela.
@@ -192,6 +195,11 @@ wrap_app! {
             if std::env::var_os("JANGADA_GPU").is_none() && !aj.placa_de_video {
                 sw(cl, "disable-gpu");
                 sw(cl, "disable-gpu-compositing");
+            }
+            // A porta de depuração aberta: o inspetor que vem no motor (devtools://) pode se
+            // ligar a ela numa aba da Jangada.
+            if DEPURACAO.load(std::sync::atomic::Ordering::Relaxed) != 0 {
+                val(cl, "remote-allow-origins", "devtools://devtools");
             }
             val(cl, "renderer-process-limit", "4");
             sw(cl, "process-per-site");

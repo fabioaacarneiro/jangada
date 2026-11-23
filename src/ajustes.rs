@@ -48,11 +48,13 @@ pub struct Ajustes {
     pub inicio_fundo: String,
     pub inicio_atalhos: bool,
     pub inicio_busca: bool,
+    /// Ferramentas do desenvolvedor: abre a porta local de depuração (vale ao reabrir).
+    pub ferramentas_dev: bool,
 }
 
 impl Default for Ajustes {
     fn default() -> Self {
-        Self { inicio: String::new(), reabrir_abas: false, busca: 0, barra_favoritos: true, bloqueador: true, nao_rastrear: true, escuro_nas_paginas: false, bloquear_janelas: true, cookies_terceiros: true, senhas: true, placa_de_video: false, endereco_completo: false, zoom: 0.0, inicio_fundo: String::new(), inicio_atalhos: true, inicio_busca: true }
+        Self { inicio: String::new(), reabrir_abas: false, busca: 0, barra_favoritos: true, bloqueador: true, nao_rastrear: true, escuro_nas_paginas: false, bloquear_janelas: true, cookies_terceiros: true, senhas: true, placa_de_video: false, endereco_completo: false, zoom: 0.0, inicio_fundo: String::new(), inicio_atalhos: true, inicio_busca: true, ferramentas_dev: false }
     }
 }
 
@@ -91,6 +93,7 @@ impl Ajustes {
                 "inicio_fundo" => a.inicio_fundo = v.to_string(),
                 "inicio_atalhos" => a.inicio_atalhos = sim(v),
                 "inicio_busca" => a.inicio_busca = sim(v),
+                "ferramentas_dev" => a.ferramentas_dev = sim(v),
                 _ => {}
             }
         }
@@ -100,8 +103,8 @@ impl Ajustes {
     pub fn salvar(&self) {
         let b = |v: bool| if v { "sim" } else { "nao" };
         let t = format!(
-            "# Preferências da Jangada (Jangada ▸ Preferências…)\ninicio = {}\nreabrir_abas = {}\nbusca = {}\nbarra_favoritos = {}\nbloqueador = {}\nnao_rastrear = {}\nescuro_nas_paginas = {}\nbloquear_janelas = {}\ncookies_terceiros = {}\nsenhas = {}\nplaca_de_video = {}\nendereco_completo = {}\nzoom = {}\ninicio_fundo = {}\ninicio_atalhos = {}\ninicio_busca = {}\n",
-            self.inicio, b(self.reabrir_abas), self.busca, b(self.barra_favoritos), b(self.bloqueador), b(self.nao_rastrear), b(self.escuro_nas_paginas), b(self.bloquear_janelas), b(self.cookies_terceiros), b(self.senhas), b(self.placa_de_video), b(self.endereco_completo), self.zoom, self.inicio_fundo, b(self.inicio_atalhos), b(self.inicio_busca)
+            "# Preferências da Jangada (Jangada ▸ Preferências…)\ninicio = {}\nreabrir_abas = {}\nbusca = {}\nbarra_favoritos = {}\nbloqueador = {}\nnao_rastrear = {}\nescuro_nas_paginas = {}\nbloquear_janelas = {}\ncookies_terceiros = {}\nsenhas = {}\nplaca_de_video = {}\nendereco_completo = {}\nzoom = {}\ninicio_fundo = {}\ninicio_atalhos = {}\ninicio_busca = {}\nferramentas_dev = {}\n",
+            self.inicio, b(self.reabrir_abas), self.busca, b(self.barra_favoritos), b(self.bloqueador), b(self.nao_rastrear), b(self.escuro_nas_paginas), b(self.bloquear_janelas), b(self.cookies_terceiros), b(self.senhas), b(self.placa_de_video), b(self.endereco_completo), self.zoom, self.inicio_fundo, b(self.inicio_atalhos), b(self.inicio_busca), b(self.ferramentas_dev)
         );
         let _ = std::fs::write(pasta().join("ajustes.conf"), t);
         self.aplicar();
@@ -170,7 +173,7 @@ pub fn historico() -> Vec<(String, String)> {
 
 /// Uma visita: vai para o topo (sem repetir o endereço), no máximo 2000.
 pub fn visitar(titulo: &str, url: &str) {
-    if url.is_empty() || url.starts_with("data:") || url.starts_with("file:") {
+    if url.is_empty() || url.starts_with("data:") || url.starts_with("file:") || url.starts_with("devtools:") {
         return;
     }
     let mut v = historico();

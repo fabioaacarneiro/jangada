@@ -133,6 +133,55 @@ pub fn site(url: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Todo texto com tr! tem a tradução em locales/en.po.
+    #[test]
+    fn todos_os_textos_traduzidos() {
+        let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let po = std::fs::read_to_string(raiz.join("locales/en.po")).unwrap();
+        let ids: std::collections::HashSet<&str> = po.lines().filter_map(|l| l.strip_prefix("msgid \"")?.strip_suffix('"')).collect();
+        let mut faltam = Vec::new();
+        for e in std::fs::read_dir(raiz.join("src")).unwrap().flatten() {
+            let texto = std::fs::read_to_string(e.path()).unwrap_or_default();
+            for pedaco in texto.split("tr!(").skip(1) {
+                let Some(resto) = pedaco.trim_start().strip_prefix('"') else { continue };
+                // O literal até a aspa que não está escapada.
+                let mut fim = None;
+                let b = resto.as_bytes();
+                let mut i = 0;
+                while i < b.len() {
+                    match b[i] {
+                        b'\\' => i += 2,
+                        b'"' => {
+                            fim = Some(i);
+                            break;
+                        }
+                        _ => i += 1,
+                    }
+                }
+                let lit = &resto[..fim.unwrap()];
+                // (O próprio padrão deste teste não é um texto: atravessa linhas.)
+                if !lit.contains('\n') && !ids.contains(lit) {
+                    faltam.push(format!("{}: {lit}", e.file_name().to_string_lossy()));
+                }
+            }
+        }
+        assert!(faltam.is_empty(), "sem tradução em locales/en.po:\n{}", faltam.join("\n"));
+    }
+
+    #[test]
+    fn inspetor_acha_a_pagina_da_aba() {
+        let l: Vec<serde_json::Value> = serde_json::from_str(r#"[
+            {"id":"I","type":"page","url":"devtools://devtools/bundled/inspector.html?ws=x","title":"DevTools"},
+            {"id":"A","type":"page","url":"https://ex.com/","title":"Um"},
+            {"id":"B","type":"page","url":"https://ex.com/","title":"Dois"},
+            {"id":"W","type":"service_worker","url":"https://ex.com/sw.js","title":""}
+        ]"#).unwrap();
+        assert_eq!(escolher_pagina(&l, "https://ex.com/", "Dois").as_deref(), Some("B"));
+        assert_eq!(escolher_pagina(&l, "https://ex.com/", "Outro").as_deref(), Some("A"));
+        assert!(escolher_pagina(&l, "https://ex.com/sw.js", "").is_none());
+        assert!(escolher_pagina(&l, "devtools://devtools/bundled/inspector.html?ws=x", "DevTools").is_none());
+    }
+
     #[test]
     fn sugestoes_da_barra() {
         let fav = vec![("Facebook".to_string(), "https://www.facebook.com/".to_string())];
@@ -281,6 +330,8 @@ struct Navegador {
     ext_rx: Option<std::sync::mpsc::Receiver<Result<extensoes::Extensao, String>>>,
     ext_confirmar: Option<extensoes::Extensao>,
     ext_msg: Option<String>,
+    /// Ferramentas do desenvolvedor: o endereço do inspetor da aba, sendo procurado.
+    dev_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// Preferências ▸ Senhas: as guardadas (sem os segredos), a escolhida, a rolagem e a
     /// senha à vista.
     senhas_lista: Option<Vec<chaveiro::Login>>,
@@ -335,6 +386,24 @@ impl Navegador {
 
     fn abrir(&mut self, url: &str) {
         self.abrir_em(url, false);
+    }
+
+    /// Ferramentas do desenvolvedor: o inspetor que vem no motor, numa aba ao lado, ligado
+    /// à página da aba atual pela porta local de depuração. A lista de páginas vem da
+    /// própria porta (numa linha à parte: quem responde é o motor, que roda nesta).
+    fn ferramentas(&mut self) {
+        let porta = motor::DEPURACAO.load(std::sync::atomic::Ordering::Relaxed);
+        if porta == 0 {
+            self.aviso = Some((tr!("Ligue as Ferramentas do Desenvolvedor em Preferências ▸ Avançado e abra a Jangada de novo.").into(), Instant::now()));
+            self.mudou = true;
+            return;
+        }
+        let (url, titulo) = (self.url_atual(), self.titulo_atual());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(inspetor_de(porta, &url, &titulo));
+        });
+        self.dev_rx = Some(rx);
     }
 
     /// Abre uma aba; `fundo`: por trás (a escolhida continua a mesma).
@@ -462,6 +531,7 @@ impl Navegador {
                     self.abrir(&format!("view-source:{u}"));
                 }
             }
+            "Ctrl+Shift+I" => self.ferramentas(),
             "Ctrl+Shift+N" => {
                 // Outra janela (um processo), com o armazenamento só em memória.
                 if let Ok(exe) = std::env::current_exe() {
@@ -557,7 +627,7 @@ impl Navegador {
 
     /// As abas abertas agora (para a próxima vez), gravadas quando mudam.
     fn gravar_sessao(&mut self) {
-        let urls: Vec<String> = self.abas.iter().map(|a| a.p.borrow().url.clone()).filter(|u| !u.is_empty() && !u.starts_with("data:") && !self.eh_inicio(u)).collect();
+        let urls: Vec<String> = self.abas.iter().map(|a| a.p.borrow().url.clone()).filter(|u| !u.is_empty() && !u.starts_with("data:") && !u.starts_with("devtools:") && !self.eh_inicio(u)).collect();
         if urls != self.sessao_gravada {
             ajustes::gravar_sessao(&urls);
             self.sessao_gravada = urls;
@@ -1111,7 +1181,7 @@ impl Navegador {
         let keys = ui.keys().to_vec();
         if self.barra_foco || std::mem::take(&mut self.teclas_da_barra) {
             for k in keys {
-                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N" | "Ctrl+U") {
+                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N" | "Ctrl+U" | "Ctrl+Shift+I") {
                     self.atalho(&k.combo, false);
                 }
             }
@@ -1268,6 +1338,7 @@ impl Navegador {
                 "codigo" => {
                     self.atalho("Ctrl+U", false);
                 }
+                "dev" => self.ferramentas(),
                 "esc-site" => {
                     escudos::alternar_site(&escudos::site(&self.url_atual()));
                     self.atalho("Ctrl+R", false);
@@ -1808,12 +1879,15 @@ impl Navegador {
                 ui.checkbox(&mut self.aj.escuro_nas_paginas, tr!("Modo escuro nas páginas"));
                 ui.paragraph(tr!("Escurece as páginas que não têm um modo escuro próprio (vale ao reabrir a Jangada)."));
                 ui.space(10.0);
-                ui.paragraph(tr!("Extensões da loja do Chrome: o motor da Jangada desenha a página sem janela própria (é o que deixa a janela, as abas e os menus serem do Glove), e nesse modo o Chromium não carrega extensões. Por isso as principais vêm prontas aqui."));
+                ui.paragraph(tr!("As principais vêm prontas aqui. Extensões no formato do Chrome (scripts nas páginas e armazenamento) se instalam na aba Instaladas."));
             }
             Secao::Avancado => {
                 ui.checkbox(&mut self.aj.endereco_completo, tr!("Mostrar o endereço completo na barra"));
                 ui.checkbox(&mut self.aj.placa_de_video, tr!("Usar a placa de vídeo (vale ao reabrir a Jangada)"));
                 ui.paragraph(tr!("Sem ela a Jangada gasta menos memória; com ela, vídeos e jogos ficam mais leves para o processador."));
+                ui.space(6.0);
+                ui.checkbox(&mut self.aj.ferramentas_dev, tr!("Ferramentas do Desenvolvedor (vale ao reabrir a Jangada)"));
+                ui.paragraph(tr!("Visualizar ▸ Ferramentas do Desenvolvedor (Ctrl+Shift+I) abre o inspetor da aba. Fica aberta uma porta local de depuração: outros programas deste computador podem controlar o navegador por ela. Deixe desligado se não for usar."));
                 ui.space(14.0);
                 ui.label_ex(tr!("Downloads"), 12.0, true, tinta());
                 let pasta = pasta_downloads();
@@ -1883,7 +1957,7 @@ impl Navegador {
             _ => {}
         }
         if self.aj != antes {
-            let reabrir = self.aj.placa_de_video != antes.placa_de_video || self.aj.escuro_nas_paginas != antes.escuro_nas_paginas;
+            let reabrir = self.aj.placa_de_video != antes.placa_de_video || self.aj.escuro_nas_paginas != antes.escuro_nas_paginas || self.aj.ferramentas_dev != antes.ferramentas_dev;
             self.reabrir |= reabrir;
             if self.aj.busca != antes.busca || self.aj.inicio_fundo != antes.inicio_fundo || self.aj.inicio_atalhos != antes.inicio_atalhos || self.aj.inicio_busca != antes.inicio_busca {
                 self.refazer_inicio(ui.fonts);
@@ -2050,6 +2124,20 @@ impl App for Navegador {
 
     fn on_tick(&mut self) {
         cef::do_message_loop_work();
+        if let Some(rx) = &self.dev_rx {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.dev_rx = None;
+                    match r {
+                        Ok(u) => self.abrir(&u),
+                        Err(e) => self.aviso = Some((e, Instant::now())),
+                    }
+                    self.mudou = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(_) => self.dev_rx = None,
+            }
+        }
         let novas = motor::NOVAS_ABAS.with(|n| std::mem::take(&mut *n.borrow_mut()));
         for (u, fundo) in novas {
             self.abrir_em(&u, fundo);
@@ -2188,6 +2276,7 @@ impl App for Navegador {
                 MenuItem::new("downloads", tr!("Mostrar os Downloads"), "Ctrl+J"),
                 MenuItem::Separator,
                 MenuItem::new("codigo", tr!("Ver Código-Fonte"), "Ctrl+U"),
+                MenuItem::new("dev", tr!("Ferramentas do Desenvolvedor"), "Ctrl+Shift+I"),
             ]),
             Menu::new(tr!("Histórico"), m_hist),
             Menu::new(tr!("Favoritos"), m_favs),
@@ -2505,6 +2594,59 @@ fn gerar_icones(dir: &std::path::Path) -> std::process::ExitCode {
     0.into()
 }
 
+/// O endereço do inspetor ligado à página `url` (a de título `titulo`, se houver mais de
+/// uma com o mesmo endereço), pela porta local de depuração.
+fn inspetor_de(porta: u16, url: &str, titulo: &str) -> Result<String, String> {
+    let falha = || tr!("Não deu para abrir as Ferramentas do Desenvolvedor.").to_string();
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", porta)).map_err(|_| falha())?;
+    let _ = c.set_read_timeout(Some(Duration::from_secs(5)));
+    c.write_all(format!("GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{porta}\r\nConnection: close\r\n\r\n").as_bytes()).map_err(|_| falha())?;
+    let mut resp = String::new();
+    let _ = c.read_to_string(&mut resp);
+    let corpo = resp.split_once("\r\n\r\n").map(|(_, b)| b).ok_or_else(falha)?;
+    let lista: Vec<serde_json::Value> = serde_json::from_str(corpo).map_err(|_| falha())?;
+    let id = escolher_pagina(&lista, url, titulo).ok_or_else(|| tr!("Esta aba não tem uma página para inspecionar.").to_string())?;
+    Ok(format!("devtools://devtools/bundled/inspector.html?ws=127.0.0.1:{porta}/devtools/page/{id}"))
+}
+
+/// Na lista de páginas do motor, o id da aba: mesmo endereço (e, se houver várias, o mesmo
+/// título). Os próprios inspetores ficam de fora.
+fn escolher_pagina(lista: &[serde_json::Value], url: &str, titulo: &str) -> Option<String> {
+    let campo = |p: &serde_json::Value, k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let paginas: Vec<&serde_json::Value> = lista.iter().filter(|p| campo(p, "type") == "page" && !campo(p, "url").starts_with("devtools://")).collect();
+    let mesmo: Vec<&&serde_json::Value> = paginas.iter().filter(|p| campo(p, "url") == url).collect();
+    let p = mesmo.iter().find(|p| campo(p, "title") == titulo).or(mesmo.first())?;
+    Some(campo(p, "id")).filter(|i| !i.is_empty())
+}
+
+/// A porta pedida com `--depurar [PORTA]` (padrão 9222), ou None sem a opção.
+fn porta_depuracao() -> Option<u16> {
+    let args: Vec<String> = std::env::args().collect();
+    let i = args.iter().position(|a| a == "--depurar")?;
+    Some(args.get(i + 1).and_then(|p| p.parse::<u16>().ok()).filter(|p| *p != 0).unwrap_or(9222))
+}
+
+/// Os endereços da linha de comando: sem as opções e sem o número de `--depurar`.
+fn enderecos_da_linha() -> Vec<String> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut out = Vec::new();
+    let mut pular = false;
+    for (i, a) in args.iter().enumerate() {
+        if pular {
+            pular = false;
+            continue;
+        }
+        if a == "--depurar" {
+            pular = args.get(i + 1).is_some_and(|p| p.parse::<u16>().is_ok());
+            continue;
+        }
+        if !a.starts_with("--") {
+            out.push(a.clone());
+        }
+    }
+    out
+}
+
 fn main() -> std::process::ExitCode {
     if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
         if a == "--icones" {
@@ -2550,7 +2692,8 @@ fn main() -> std::process::ExitCode {
         None => "https://duckduckgo.com/".to_string(),
     };
     // Endereços pedidos (o resto da linha de comando que não é opção).
-    let urls: Vec<String> = std::env::args().skip(1).filter(|a| !a.starts_with("--")).map(|a| endereco(&a, &inicio_url, aj.busca_url())).collect();
+    let pedida = porta_depuracao();
+    let urls: Vec<String> = enderecos_da_linha().into_iter().map(|a| endereco(&a, &inicio_url, aj.busca_url())).collect();
     // Já aberta: manda os endereços para ela e sai.
     // A janela privada é outra janela: não manda os endereços para a normal e não a substitui.
     let privada = std::env::args().any(|a| a == "--privada");
@@ -2558,6 +2701,9 @@ fn main() -> std::process::ExitCode {
     let sock = socket_path();
     if !privada {
         if let Ok(mut c) = UnixStream::connect(&sock) {
+            if pedida.is_some() {
+                eprintln!("jangada: já está aberta; a depuração só vale ao abrir a Jangada (feche-a e rode --depurar de novo)");
+            }
             let text = if urls.is_empty() { "\n".to_string() } else { urls.join("\n") };
             let _ = c.write_all(text.as_bytes());
             return 0.into();
@@ -2588,6 +2734,13 @@ fn main() -> std::process::ExitCode {
         })
     };
 
+    // A porta de depuração: a pedida, ou uma livre ao acaso com as Ferramentas do
+    // Desenvolvedor ligadas nas Preferências.
+    let depurar: Option<u16> = pedida.or_else(|| {
+        // (A janela privada não abre a porta só pela preferência: só com --depurar.)
+        (aj.ferramentas_dev && !privada).then(|| std::net::TcpListener::bind(("127.0.0.1", 0)).ok().and_then(|l| l.local_addr().ok()).map(|a| a.port())).flatten()
+    });
+    motor::DEPURACAO.store(depurar.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
     let perfil = dados.join("Perfil");
     let idioma = if glove_config::idioma().starts_with("en") { "en-US" } else { "pt-BR" };
     // Os sites veem a Jangada como um Chrome comum: com um nome a mais no fim, o Google
@@ -2609,8 +2762,15 @@ fn main() -> std::process::ExitCode {
         user_agent_product: produto.as_str().into(),
         log_severity: cef::LogSeverity::ERROR,
         background_color: 0xffff_ffff,
+        // Só com --depurar: a porta de depuração do Chromium (127.0.0.1), para as
+        // ferramentas de desenvolvedor de outro navegador (chrome://inspect ou
+        // http://127.0.0.1:PORTA/json).
+        remote_debugging_port: depurar.map(i32::from).unwrap_or(0),
         ..Default::default()
     };
+    if let Some(p) = pedida {
+        eprintln!("jangada: depuração em http://127.0.0.1:{p} (só neste computador; quem a alcança controla o navegador)");
+    }
     if cef::initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()) != 1 {
         eprintln!("jangada: o motor do Chromium não iniciou");
         return 1.into();
@@ -2676,6 +2836,7 @@ fn main() -> std::process::ExitCode {
         ext_rx: None,
         ext_confirmar: None,
         ext_msg: None,
+        dev_rx: None,
         senhas_lista: None,
         senhas_sel: None,
         senhas_tabela: TableState::default(),

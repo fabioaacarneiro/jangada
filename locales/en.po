@@ -423,8 +423,8 @@ msgstr "Shields: Ads and Trackers"
 msgid "Escudos: anúncios e rastreadores"
 msgstr "Shields: ads and trackers"
 
-msgid "Extensões da loja do Chrome: o motor da Jangada desenha a página sem janela própria (é o que deixa a janela, as abas e os menus serem do Glove), e nesse modo o Chromium não carrega extensões. Por isso as principais vêm prontas aqui."
-msgstr "Chrome Web Store extensions: Jangada's engine draws the page without a window of its own (that is what lets the window, tabs and menus be Glove's), and in that mode Chromium does not load extensions. That is why the main ones come built in here."
+msgid "As principais vêm prontas aqui. Extensões no formato do Chrome (scripts nas páginas e armazenamento) se instalam na aba Instaladas."
+msgstr "The main ones come built in. Extensions in the Chrome format (page scripts and storage) are installed in the Installed tab."
 
 msgid "Gerenciar Extensões…"
 msgstr "Manage Extensions…"
@@ -608,3 +608,88 @@ msgstr "Forget Permissions"
 
 msgid "Padrão"
 msgstr "Default"
+
+
+msgid "Ligue as Ferramentas do Desenvolvedor em Preferências ▸ Avançado e abra a Jangada de novo."
+msgstr "Turn on Developer Tools in Preferences ▸ Advanced and open Jangada again."
+
+msgid "Não deu para abrir as Ferramentas do Desenvolvedor."
+msgstr "Couldn't open the Developer Tools."
+
+msgid "Esta aba não tem uma página para inspecionar."
+msgstr "This tab has no page to inspect."
+
+msgid "Ferramentas do Desenvolvedor (vale ao reabrir a Jangada)"
+msgstr "Developer Tools (takes effect when Jangada reopens)"
+
+msgid "Visualizar ▸ Ferramentas do Desenvolvedor (Ctrl+Shift+I) abre o inspetor da aba. Fica aberta uma porta local de depuração: outros programas deste computador podem controlar o navegador por ela. Deixe desligado se não for usar."
+msgstr "View ▸ Developer Tools (Ctrl+Shift+I) opens the tab's inspector. A local debugging port stays open: other programs on this computer can control the browser through it. Leave it off if you won't use it."
+
+msgid "A pasta não tem um manifest.json."
+msgstr "The folder has no manifest.json."
+
+msgid "O manifest.json não é um JSON válido: {}"
+msgstr "The manifest.json is not valid JSON: {}"
+
+msgid "A Jangada aceita extensões do Manifest V3 (o manifest_version é {})."
+msgstr "Jangada accepts Manifest V3 extensions (the manifest_version is {})."
+
+msgid "O manifesto não tem o nome."
+msgstr "The manifest has no name."
+
+msgid "O arquivo {} do manifesto não existe."
+msgstr "The manifest's file {} doesn't exist."
+
+msgid "Não achei a pasta {}."
+msgstr "Couldn't find the folder {}."
+
+msgid "Não achei o manifest.json em {}."
+msgstr "Couldn't find the manifest.json in {}."
+
+msgid "Não consegui baixar o repositório {}/{} do GitHub."
+msgstr "Couldn't download the {}/{} repository from GitHub."
+
+msgid "O arquivo não é um .zip válido: {}"
+msgstr "The file is not a valid .zip: {}"
+
+msgid "Instaladas"
+msgstr "Installed"
+
+msgid "Instalar uma extensão"
+msgstr "Install an extension"
+
+msgid "Uma pasta, um arquivo .zip ou um repositório do GitHub (https://github.com/usuario/repositorio). Antes de instalar, você vê o que ela pede."
+msgstr "A folder, a .zip file or a GitHub repository (https://github.com/user/repository). Before installing, you see what it asks for."
+
+msgid "Verificar"
+msgstr "Check"
+
+msgid "Verificando…"
+msgstr "Checking…"
+
+msgid "Nenhuma extensão instalada."
+msgstr "No extensions installed."
+
+msgid "Remover"
+msgstr "Remove"
+
+msgid "Extensão removida."
+msgstr "Extension removed."
+
+msgid "Não pede acesso especial a nada."
+msgstr "Doesn't ask for any special access."
+
+msgid "Pede acesso a: {}."
+msgstr "Asks for access to: {}."
+
+msgid "Instalar esta extensão?"
+msgstr "Install this extension?"
+
+msgid "Instalar"
+msgstr "Install"
+
+msgid "Instalada: {}."
+msgstr "Installed: {}."
+
+msgid "{} em {}"
+msgstr "{} on {}"

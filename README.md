@@ -22,10 +22,17 @@ Para usar a placa de vídeo: `JANGADA_GPU=1 jangada`.
 ## Desenvolvimento web
 
 - **Ver código-fonte** (Ctrl+U, ou no menu Visualizar): abre o HTML da página numa aba.
-- **Ferramentas do desenvolvedor (inspetor, console e rede): ainda não.** A janela de ferramentas do
-  motor não aparece no modo sem janela da Jangada. A saída possível é a porta de depuração remota do
-  motor, que expõe um endereço local para controlar o navegador; por segurança, isso precisaria ser
-  uma opção explícita de quem programa, e não ligada por padrão.
+- **Ferramentas do desenvolvedor** (Ctrl+Shift+I, ou Visualizar ▸ Ferramentas do Desenvolvedor):
+  o inspetor do Chromium (elementos, console, rede, fontes, desempenho) abre numa aba ao lado,
+  ligado à página da aba atual. Vêm **desligadas**: ligue em Preferências ▸ Avançado e abra a
+  Jangada de novo.
+- **Por que desligadas:** o inspetor fala com o motor por uma porta local de depuração (só em
+  `127.0.0.1`, numa porta livre escolhida ao acaso). Qualquer programa deste computador que a
+  alcance pode controlar o navegador, ler as páginas abertas e os cookies delas. Ligue só quando
+  for usar. A janela privada não abre a porta pela preferência, só com `--depurar`.
+- **Para uma sessão só, ou para outra ferramenta:** `jangada --depurar [PORTA]` (padrão 9222) abre a
+  porta numa porta fixa; dá para usar `chrome://inspect` de outro navegador, o Puppeteer ou o
+  Playwright. Só vale ao abrir a Jangada: se ela já estiver aberta, feche-a antes.
 
 ## Permissões dos sites
 
