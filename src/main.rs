@@ -183,6 +183,14 @@ mod tests {
     }
 
     #[test]
+    fn sugestao_pela_altura() {
+        assert_eq!(sugestao_na_altura(2.0, 3), None);
+        assert_eq!(sugestao_na_altura(10.0, 3), Some(0));
+        assert_eq!(sugestao_na_altura(4.0 + 26.0 + 5.0, 3), Some(1));
+        assert_eq!(sugestao_na_altura(4.0 + 3.0 * 26.0 + 1.0, 3), None);
+    }
+
+    #[test]
     fn sugestoes_da_barra() {
         let fav = vec![("Facebook".to_string(), "https://www.facebook.com/".to_string())];
         let hist = vec![
@@ -257,6 +265,8 @@ struct Navegador {
     /// O mouse estava sobre a página (para avisar a saída).
     dentro: bool,
     apertado: bool,
+    /// O botão desceu sobre a lista de sugestões: até ele subir, a página não recebe o mouse.
+    na_sugestao: bool,
     aviso: Option<(String, Instant)>,
     servidor: Option<UnixListener>,
     /// Última vez que algo mexeu (o motor trabalha mais rápido logo depois).
@@ -762,6 +772,24 @@ impl Navegador {
         let fx = ((w - fw) / 2.0).max(livre.0).min(livre.1 - fw);
         let fr = Rect::new(fx, ((BARRA_H - CAMPO_H) / 2.0).round(), fw, CAMPO_H);
         let autofocus = std::mem::take(&mut self.focar_barra);
+        // Clique numa sugestão: vale já no apertar. O campo perde o foco nesse mesmo quadro
+        // (o botão desceu fora dele) e a lista some; esperar o soltar perdia o clique.
+        if self.barra_foco && ui.mouse_pressed() {
+            let (px, py) = ui.pointer();
+            let escolhida = self
+                .sugestao_area
+                .filter(|r| r.contains((px, py)))
+                .and_then(|r| sugestao_na_altura(py - r.y, self.sugestoes.len()))
+                .and_then(|i| self.sugestoes.get(i))
+                .map(|(_, u)| u.clone());
+            if let Some(u) = escolhida {
+                self.na_sugestao = true;
+                self.carregar(&u);
+                self.barra_foco = false;
+                self.sugestoes.clear();
+                self.sugestao_sel = None;
+            }
+        }
         if autofocus {
             if let Some(h) = self.host() {
                 h.set_focus(0);
@@ -1123,7 +1151,14 @@ impl Navegador {
     fn entrada(&mut self, ui: &mut Ui, area: Rect) {
         let Some(h) = self.host() else { return };
         let (px, py) = ui.pointer();
-        // Sobre a lista de sugestões, o mouse não vai para a página.
+        // Sobre a lista de sugestões, o mouse não vai para a página (nem o soltar do clique
+        // que escolheu uma delas: a lista já sumiu, mas o botão ainda está descendo nela).
+        if self.na_sugestao {
+            if ui.mouse_released() || !ui.mouse_down() {
+                self.na_sugestao = false;
+            }
+            return;
+        }
         if self.sugestao_area.is_some_and(|r| r.contains((px, py))) {
             return;
         }
@@ -2008,6 +2043,12 @@ fn fr_sugestao_w(w: f32) -> f32 {
     (w - 240.0).clamp(120.0, 640.0)
 }
 
+/// Qual sugestão está na altura `y` (contada do topo da lista): 4 de margem e 26 por linha.
+fn sugestao_na_altura(y: f32, n: usize) -> Option<usize> {
+    let i = ((y - 4.0) / 26.0).floor();
+    (i >= 0.0 && (i as usize) < n).then_some(i as usize)
+}
+
 fn fr_sugestao_x(w: f32) -> f32 {
     ((w - fr_sugestao_w(w)) / 2.0).max(0.0)
 }
@@ -2503,7 +2544,6 @@ impl App for Navegador {
             self.sugestao_area = Some(r);
             ui.c.fill(rrect(r.x, r.y, r.w, r.h, 8.0), &solid(if ui.theme.dark { rgba(44, 44, 48, 250) } else { rgba(252, 252, 254, 250) }));
             ui.c.stroke(rrect(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0, 8.0), &solid(rgba(160, 160, 166, 255)), 1.0);
-            let mut escolhida = None;
             for (i, (titulo, url)) in self.sugestoes.clone().iter().enumerate() {
                 let linha = Rect::new(r.x + 4.0, r.y + 4.0 + i as f32 * 26.0, r.w - 8.0, 24.0);
                 let h = ui.hit(linha);
@@ -2514,16 +2554,6 @@ impl App for Navegador {
                 let cor = if ativa { Color::WHITE } else { tinta() };
                 let t = ui.fonts.ellipsize(&format!("{}   {}", titulo, mostrar(url)), 12.0, false, linha.w - 16.0);
                 ui.fonts.draw(ui.c, &t, linha.x + 8.0, linha.y + 16.0, 12.0, false, cor);
-                if h.clicked {
-                    escolhida = Some(url.clone());
-                }
-            }
-            if let Some(u) = escolhida {
-                self.carregar(&u);
-                self.barra_foco = false;
-                self.sugestoes.clear();
-                self.sugestao_sel = None;
-                self.sugestao_area = None;
             }
         }
         // O mouse vai sempre para a página (passar sobre ela, a mãozinha nos links); o
@@ -2796,6 +2826,7 @@ fn main() -> std::process::ExitCode {
         escala: 1.0,
         dentro: false,
         apertado: false,
+        na_sugestao: false,
         aviso: None,
         servidor,
         ativo: Instant::now(),
