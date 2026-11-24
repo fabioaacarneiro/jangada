@@ -66,8 +66,8 @@ msgstr "New Tab"
 msgid "Não foi possível abrir a página"
 msgstr "The page could not be opened"
 
-msgid "O navegador do Glove OS. Motor: Chromium {} (CEF). Leve: a placa de vídeo desenha as páginas e nada fica rodando de fundo."
-msgstr "The Glove OS browser. Engine: Chromium {} (CEF). Light: the GPU draws the pages and nothing runs in the background."
+msgid "O navegador do Glove OS. Motor: WebKitGTK {}, o do sistema (as correções de segurança chegam pelas atualizações da distribuição). Leve: a placa de vídeo desenha as páginas e nada fica rodando de fundo."
+msgstr "The Glove OS browser. Engine: WebKitGTK {}, the system one (security fixes arrive with your distribution's updates). Light: the GPU draws the pages and nothing runs in the background."
 
 msgid "Recarregar"
 msgstr "Reload"
@@ -513,8 +513,8 @@ msgstr "Username"
 msgid "Vem o que o navegador guarda neste computador. Feche-o antes, para trazer tudo. As extensões dele não funcionam na Jangada."
 msgstr "What the browser keeps on this computer comes over. Close it first to bring everything. Its extensions do not work in Jangada."
 
-msgid "{} anúncios e rastreadores barrados nesta página"
-msgstr "{} ads and trackers blocked on this page"
+msgid "O motor barra os anúncios e rastreadores antes de carregarem"
+msgstr "The engine blocks ads and trackers before they load"
 
 msgid "{} cookies não puderam ser decifrados."
 msgstr "{} cookies could not be decrypted."
@@ -610,20 +610,17 @@ msgid "Padrão"
 msgstr "Default"
 
 
-msgid "Ligue as Ferramentas do Desenvolvedor em Preferências ▸ Avançado e abra a Jangada de novo."
-msgstr "Turn on Developer Tools in Preferences ▸ Advanced and open Jangada again."
+msgid "A página parou de responder."
+msgstr "The page stopped responding."
 
-msgid "Não deu para abrir as Ferramentas do Desenvolvedor."
-msgstr "Couldn't open the Developer Tools."
+msgid "Código-fonte de {}"
+msgstr "Source of {}"
 
-msgid "Esta aba não tem uma página para inspecionar."
-msgstr "This tab has no page to inspect."
+msgid "Mostrar \"Inspecionar Elemento\" no menu das páginas"
+msgstr "Show \"Inspect Element\" in the page menu"
 
-msgid "Ferramentas do Desenvolvedor (vale ao reabrir a Jangada)"
-msgstr "Developer Tools (takes effect when Jangada reopens)"
-
-msgid "Visualizar ▸ Ferramentas do Desenvolvedor (Ctrl+Shift+I) abre o inspetor da aba. Fica aberta uma porta local de depuração: outros programas deste computador podem controlar o navegador por ela. Deixe desligado se não for usar."
-msgstr "View ▸ Developer Tools (Ctrl+Shift+I) opens the tab's inspector. A local debugging port stays open: other programs on this computer can control the browser through it. Leave it off if you won't use it."
+msgid "Visualizar ▸ Ferramentas do Desenvolvedor (Ctrl+Shift+I) abre o inspetor da aba numa janela ao lado. Nada fica aberto para outros programas."
+msgstr "View ▸ Developer Tools (Ctrl+Shift+I) opens the tab's inspector next to the page. Nothing is left open to other programs."
 
 msgid "A pasta não tem um manifest.json."
 msgstr "The folder has no manifest.json."

@@ -1,39 +1,50 @@
 # Jangada
 
-O navegador do **Glove OS**. O motor é o do Chromium (via [CEF](https://github.com/chromiumembedded/cef)),
-com os recursos da web de hoje; a janela, as abas, a barra de endereço e as páginas da própria
-Jangada (início e erro) são do Glove, desenhadas pelo [glove-ui](https://github.com/fabioaacarneiro/glove-ui),
-no visual clássico ou no Moderno (claro e escuro).
+O navegador do **Glove OS**. O motor é o [WebKitGTK](https://webkitgtk.org/), o do sistema: as
+correções de segurança dele chegam pelas atualizações da distribuição, como as de qualquer outro
+programa. A janela, as abas, a barra de endereço e as páginas da própria Jangada (início e erro) são
+do Glove, desenhadas pelo [glove-ui](https://github.com/fabioaacarneiro/glove-ui), no visual
+clássico ou no Moderno (claro e escuro).
 
-*English: Jangada is the Glove OS web browser: the Chromium engine (CEF) in a Glove window.*
+*English: Jangada is the Glove OS web browser: the system WebKitGTK engine in a Glove window.*
+
+A versão 1.x usava o motor do Chromium (CEF) e continua na branch `cef` (é a do Slackware 15.0).
 
 ## Leve
 
 Feita para computadores modestos:
 
-- a placa de vídeo desenha as páginas e só as partes que mudaram são copiadas para a janela
-  (passar o mouse ou um cursor piscando não recopia a página inteira);
-- a janela só é refeita quando algo muda (parada, a Jangada quase não gasta processador);
-- no máximo 4 processos de página, sem o cache de voltar (páginas inteiras na memória) e sem rede
-  de fundo (atualizações de componentes, tradução, sugestões).
+- a página é um widget do sistema dentro da janela do Glove: a placa de vídeo a desenha direto na
+  tela, sem cópia nenhuma pelo processador (rolar feeds longos, vídeos e mapas fica leve);
+- as barras da Jangada são desenhadas pelo glove-ui por cima, só quando algo muda: parada, a
+  Jangada não gasta processador nenhum (nada de relógio rodando de fundo);
+- os escudos são filtros nativos do motor (o formato do Safari, compilados uma vez): nenhum script
+  dos escudos roda nas páginas;
+- o pacote tem uns 4 MB: o motor, os codecs de vídeo (GStreamer) e o resto vêm da distribuição.
 
 Para desenhar só com o processador (placa de vídeo com problema): desmarque *Usar a placa de
 vídeo* em Preferências ▸ Avançado, ou abra com `JANGADA_SEM_GPU=1 jangada`.
+
+## Sites e vídeos
+
+- Os sites veem a Jangada como o Safari (o motor é o mesmo, o WebKit): mandam a versão completa
+  deles, e os que conferem o navegador (WhatsApp Web, bancos) aceitam. O motor ainda corrige, site
+  a site, o que algum exigir.
+- **Vídeo:** o GStreamer do sistema decodifica H.264, AAC, VP9, AV1 e Opus (no Fedora, o H.264 vem
+  do OpenH264; o conjunto completo, do `gstreamer1-plugin-libav` do RPM Fusion). Com os plugins do
+  VA-API (`gstreamer1.0-plugins-bad`), a placa de vídeo decodifica.
+- **Tela cheia** dos vídeos: as barras da Jangada somem; Esc volta.
 
 ## Desenvolvimento web
 
 - **Ver código-fonte** (Ctrl+U, ou no menu Visualizar): abre o HTML da página numa aba.
 - **Ferramentas do desenvolvedor** (Ctrl+Shift+I, ou Visualizar ▸ Ferramentas do Desenvolvedor):
-  o inspetor do Chromium (elementos, console, rede, fontes, desempenho) abre numa aba ao lado,
-  ligado à página da aba atual. Vêm **desligadas**: ligue em Preferências ▸ Avançado e abra a
-  Jangada de novo.
-- **Por que desligadas:** o inspetor fala com o motor por uma porta local de depuração (só em
-  `127.0.0.1`, numa porta livre escolhida ao acaso). Qualquer programa deste computador que a
-  alcance pode controlar o navegador, ler as páginas abertas e os cookies delas. Ligue só quando
-  for usar. A janela privada não abre a porta pela preferência, só com `--depurar`.
-- **Para uma sessão só, ou para outra ferramenta:** `jangada --depurar [PORTA]` (padrão 9222) abre a
-  porta numa porta fixa; dá para usar `chrome://inspect` de outro navegador, o Puppeteer ou o
-  Playwright. Só vale ao abrir a Jangada: se ela já estiver aberta, feche-a antes.
+  o inspetor do WebKit (elementos, console, rede, fontes, armazenamento, linha do tempo) abre junto
+  da página da aba atual. Não abre porta nenhuma: só a Jangada fala com ele.
+  Preferências ▸ Avançado põe também o **Inspecionar Elemento** no menu do botão direito.
+- **Depurar de outro navegador:** `jangada --depurar [PORTA]` (padrão 9222) abre o inspetor em
+  `http://127.0.0.1:PORTA` (só neste computador) para outro navegador. Só vale ao abrir a Jangada:
+  se ela já estiver aberta, feche-a antes.
 
 ## Permissões dos sites
 
@@ -43,11 +54,10 @@ guardados para aquele site (Preferências ▸ Privacidade mostra quantos sites t
 "Esquecer as Permissões" apaga tudo). "Só desta vez" vale para a página aberta: ao recarregar, a
 pergunta volta.
 
-- **Câmera e microfone** funcionam (testados com uma câmera virtual).
-- **Localização:** a pergunta funciona, mas a posição vem do serviço de localização do Google, e os
-  builds sem a chave desse serviço não a obtêm. Mesmo permitindo, o site pode esperar até dar tempo
-  esgotado.
-- **Captura da tela e do áudio do computador:** a Jangada não concede.
+- **Câmera e microfone** vêm pelo GStreamer (com o PipeWire, pelo `gstreamer1.0-pipewire`).
+- **Localização:** pelo serviço de localização do sistema (GeoClue), se houver.
+- **Notificações** permitidas aparecem no avisador do sistema (o do Glove).
+- **Captura da tela:** a Jangada não concede.
 
 ## Extensões
 
@@ -69,27 +79,29 @@ Também dá para instalar e ligar ou desligar pelo Preferências ▸ **Instalada
   `*.dominio.com`, caminhos com `*`).
 - **Não há:** scripts de fundo (`background`), janela de ação, páginas de opções, APIs além do
   `storage` e do acesso às páginas, nem `chrome.tabs` e afins.
-- **Limite:** os scripts rodam no mesmo mundo da página (não isolado), então não dá para esconder
-  nada dela; só instale extensões de quem você confia.
+- **Mundo isolado:** como no Chrome, os scripts das extensões (e os da Jangada, como o das senhas)
+  rodam num mundo à parte: veem a página, mas a página não os vê nem fala com a Jangada por eles.
+  Ainda assim, só instale extensões de quem você confia: elas leem as páginas em que entram.
 - O exemplo completo está em `exemplos/destaque/` (aviso no topo de páginas e contagem de visitas).
 
 ## Janela privada
 
 **Arquivo ▸ Nova Janela Privada** (Ctrl+Shift+N) abre uma janela que não deixa rastro: o histórico,
-os favoritos, as abas da última vez e as senhas não são gravados, e os cookies e o armazenamento dos
-sites ficam só na memória, sem perfil em disco. Ao fechar, a pasta temporária dela (em
-`XDG_RUNTIME_DIR`, que fica na memória) é apagada. Não oferece para guardar senhas nem as preenche.
+os favoritos, as abas da última vez e as senhas não são gravados, e os cookies, o cache e o
+armazenamento dos sites ficam só na memória (uma sessão efêmera do motor, sem nada em disco). Não
+oferece para guardar senhas nem as preenche.
 O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro). Uma janela privada
 é um processo à parte, então ela não se mistura com a normal.
 
 ## Escudos, senhas e importar
 
-- **Escudos** (como os do Brave, com o mesmo motor de bloqueio dele, o `adblock`): anúncios e
-  rastreadores barrados antes de carregar (EasyList, EasyPrivacy, a lista portuguesa, a do Peter Lowe
-  e os filtros do uBlock Origin, renovadas toda semana em `~/.cache/jangada/escudos`) e os espaços de
-  anúncio escondidos na página. O escudo na barra mostra quantos itens a página teve barrados; o
-  clique liga ou desliga os escudos no site. Também barra os cookies de terceiros e não deixa o
-  WebRTC mostrar o endereço da rede local.
+- **Escudos:** anúncios e rastreadores barrados pelo próprio motor antes de carregar, e os espaços
+  de anúncio escondidos na página. As listas são as do Brave e do uBlock (EasyList, EasyPrivacy, a
+  portuguesa, a do Peter Lowe e os filtros do uBlock Origin, renovadas toda semana em
+  `~/.cache/jangada/escudos`); o motor de bloqueio do Brave (o `adblock`) as converte para os
+  filtros de conteúdo do WebKit, que ele compila e guarda. O clique no escudo da barra liga ou
+  desliga os escudos no site. **Barrar cookies de terceiros** liga também a prevenção de
+  rastreamento do motor (a do Safari: os rastreadores entre sites perdem os cookies).
 - **Senhas:** ao entrar num site, a Jangada oferece guardar a senha (no chaveiro do sistema: aparece
   no Acesso às Chaves do Glove) e a preenche da próxima vez. Preferências ▸ Senhas lista, mostra,
   copia e apaga.
@@ -99,10 +111,7 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
   que o próprio navegador guarda no chaveiro. A sincronização com a conta do Google só existe no
   Chrome; o que vem é o que ele guarda no computador.
 - **Extensões** (menu Extensões): as da Jangada (escudos, cookies de terceiros, modo escuro nas
-  páginas). As da loja do Chrome não funcionam: o motor desenha a página sem janela própria (é o que
-  deixa a janela, as abas e os menus serem do Glove), e nesse modo o Chromium não carrega extensões.
-- **Chaves de acesso (passkeys)** ficam desligadas: sem janela própria o motor não mostra o pedido
-  do sistema, e a página ficava esperando para sempre. Os sites oferecem a senha e o código.
+  páginas) e as instaladas (veja acima). As da loja do Chrome não funcionam (o motor é outro).
 
 ## Como usar
 
@@ -124,7 +133,8 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
   Preferências ▸ Geral dá para escolher o fundo (padrão, cinza claro, azul claro, grafite ou uma
   imagem do computador), e mostrar ou esconder os atalhos e a caixa de busca.
 - **Botão direito:** o menu do Glove, solto, por cima de tudo (abrir o link em nova aba, copiar,
-  colar, buscar o texto escolhido).
+  colar, buscar o texto escolhido). Fora do Glove, um menu do GTK com os mesmos itens.
+- **Touchpad:** dois dedos para os lados voltam e avançam.
 - **Downloads** direto na pasta Downloads, com a janela Downloads (Ctrl+J, ou a seta na barra):
   o andamento, abrir, mostrar na pasta e cancelar; **avisos das páginas** (alert e confirm) como alertas do
   Glove, em janela própria; a mãozinha nos links e a barra de texto nos campos.
@@ -140,17 +150,14 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
   - *Geral:* página inicial (a da Jangada ou um endereço), reabrir as abas da última vez, a barra de
     favoritos e o tamanho padrão das páginas;
   - *Contas:* **iniciar a sessão no Google** (Gmail, YouTube, Drive e os outros serviços com a sua
-    conta; também no menu Jangada), gerenciar a conta e sair. A sessão fica guardada na Jangada; a
-    sincronização de favoritos e senhas do Chrome não existe no motor dela;
+    conta; também no menu Jangada), gerenciar a conta e sair. A sessão fica guardada na Jangada;
   - *Busca:* DuckDuckGo, Google, Bing, Ecosia, Brave Search ou Startpage;
   - *Privacidade:* bloquear as janelas que as páginas abrem sozinhas, pedir para não rastrear (Não
     Rastrear e GPC), limpar o histórico, apagar cookies e dados dos sites;
   - *Extensões:* o **bloqueador de anúncios e rastreadores** (vem ligado) e o **modo escuro nas
-    páginas**. As extensões da loja do Chrome ainda não funcionam: o motor sem janela própria não
-    as carrega;
-  - *Avançado:* o endereço completo na barra, usar a placa de vídeo e a pasta Downloads.
-- Os sites veem a Jangada como um Chrome comum (o mesmo user agent): assim o Google deixa iniciar
-  a sessão e os sites funcionam igual.
+    páginas**;
+  - *Avançado:* o endereço completo na barra, usar a placa de vídeo, o Inspecionar Elemento e a
+    pasta Downloads.
 - Abrir de novo (`jangada endereço`) abre uma aba na janela que já está aberta.
 - No pacote, a Jangada vira o navegador padrão do sistema (`x-www-browser`).
 
@@ -158,26 +165,33 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
 
 Os pacotes saem na release de cada versão (`github.com/fabioaacarneiro/jangada/releases`):
 
-- **Debian, Ubuntu e Glove OS:** `jangada_VERSÃO_amd64.deb`. Vira o navegador padrão do sistema.
-- **Fedora:** `jangada-VERSÃO-1.x86_64.rpm` (`sudo dnf install ./jangada-*.rpm`). Testado no Fedora
-  mais novo; as dependências vêm pelo dnf.
-- **Arch:** `jangada-VERSÃO-1-x86_64.pkg.tar.zst` (`sudo pacman -U ./jangada-*.pkg.tar.zst`).
-- **Slackware 15.0 e -current:** `jangada-VERSÃO-x86_64-1.tgz` (`sudo installpkg ./jangada-*.tgz`).
-  O Slackware não resolve dependências: instale pelo slackpkg as que faltarem (a descrição do pacote
-  lista).
+- **Debian, Ubuntu e Glove OS:** `jangada_VERSÃO_amd64.deb` (`sudo apt install ./jangada_*.deb`:
+  o apt traz o WebKitGTK, o GTK 4 e o GStreamer). Vira o navegador padrão do sistema. Pelo
+  repositório do Glove OS: `sudo apt install jangada`.
+- **Fedora:** `jangada-VERSÃO-1.x86_64.rpm` (`sudo dnf install ./jangada-*.rpm`), ou
+  `sudo dnf install jangada` pelo repositório do Glove.
+- **Arch:** `jangada-VERSÃO-1-x86_64.pkg.tar.zst` (`sudo pacman -U ./jangada-*.pkg.tar.zst`), ou
+  `sudo pacman -S jangada` pelo repositório do Glove.
+- **Slackware -current:** `jangada-VERSÃO-x86_64-1.tgz` (`sudo installpkg ./jangada-*.tgz`). O
+  Slackware não traz o WebKitGTK: ele vem compilado dentro do pacote (em `/usr/lib/jangada/motor`;
+  a Jangada sobe a versão dele a cada correção). O resto (GTK 4, GStreamer, libsoup 3) é do
+  Slackware; a descrição do pacote lista.
+- **Slackware 15.0:** o GTK 4 e o compilador dele são velhos para o WebKitGTK atual. Nele, a Jangada
+  fica na **1.15** (motor do Chromium, branch `cef`), que o instalador do Glove escolhe sozinho.
 
 Nos três últimos o pacote não troca o navegador padrão sozinho: escolha a Jangada nas configurações
 do sistema (ou com `xdg-settings set default-web-browser jangada.desktop`).
 
 ## Compilar e empacotar
 
-Precisa do Rust 1.89 ou mais novo, do cmake e de um compilador C++. A primeira compilação baixa o
-motor do Chromium (~200 MB).
+Precisa do Rust 1.89 ou mais novo e do WebKitGTK 6.0 e do GTK 4 para desenvolvimento
+(`libwebkitgtk-6.0-dev libgtk-4-dev` no Debian e no Ubuntu, `webkitgtk6.0-devel gtk4-devel` no
+Fedora, `webkitgtk-6.0 gtk4` no Arch).
 
 ```sh
 git clone --recursive https://github.com/fabioaacarneiro/jangada
 cd jangada
-cargo build --release         # target/release/jangada (o motor fica ao lado)
+cargo build --release         # target/release/jangada
 ./empacotar.sh                # pacotes/jangada_VERSÃO_amd64.deb
 ./empacotar-rpm.sh            # pacotes/jangada-VERSÃO-1.x86_64.rpm (precisa do rpmbuild)
 ./empacotar-arch.sh           # pacotes/jangada-VERSÃO-1-x86_64.pkg.tar.zst
@@ -187,9 +201,12 @@ A árvore dos arquivos vem sempre de `preparar.sh`, a mesma para todos os format
 scripts que compilam e conferem cada distribuição em contêiner (é o que a CI roda).
 
 A cada tag `v*`, o CI gera os pacotes (.deb, .rpm, Arch e Slackware), confere cada um instalando-o
-na própria distribuição e publica tudo na release. O repositório apt do Glove OS pega o .deb de lá.
+na própria distribuição (o .deb também no Ubuntu 24.04) e publica tudo na release. Os repositórios
+do Glove (apt, dnf e pacman) pegam os pacotes de lá. O do Slackware compila o motor
+(`ci/motor-slackware.sh`) e o guarda no cache do CI.
 
 ## Licença
 
-GPL-3.0-or-later. O motor (CEF/Chromium) tem a licença BSD dele (veja `CREDITS.html` no pacote).
+GPL-3.0-or-later. O motor (WebKitGTK) é LGPL-2.1, da distribuição (no Slackware, compilado do
+código publicado em webkitgtk.org).
 Nenhuma marca de terceiros: Jangada é arte e nome próprios do Glove OS.

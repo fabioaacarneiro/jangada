@@ -19,26 +19,24 @@ lista="$tmp/lista"
 # Só os arquivos: os diretórios são dos pacotes do sistema (filesystem, hicolor…) ou se
 # criam com os arquivos.
 (cd "$raiz" && find . -type f -o -type l | sed 's|^\.||') > "$lista"
-# O bit de caixa de areia (chrome-sandbox) é o único com permissão especial.
-sed -i 's|^/usr/lib/jangada/chrome-sandbox$|%attr(4755,root,root) /usr/lib/jangada/chrome-sandbox|' "$lista"
-sed -i -e '/^%dir /!s|^/|%attr(-,root,root) /|' -e 's|^%attr(-,root,root) %attr(4755|%attr(4755|' "$lista"
+sed -i -e '/^%dir /!s|^/|%attr(-,root,root) /|' "$lista"
 cat > "$top/SPECS/jangada.spec" <<SPEC
 Name: jangada
 Version: $v
 Release: 1
-Summary: Jangada, the Glove OS web browser (Chromium engine)
+Summary: Jangada, the Glove OS web browser (WebKitGTK engine)
 License: GPL-3.0-or-later
 URL: https://github.com/fabioaacarneiro/jangada
-Requires: nss nspr atk at-spi2-atk cups-libs libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb libxkbcommon mesa-libgbm libdrm pango cairo alsa-lib dbus-libs expat systemd-libs glib2
+Requires: webkitgtk6.0 >= 2.42 gtk4 >= 4.14 glib2 libxkbcommon systemd-libs gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-openh264
 Provides: glove-web
 Obsoletes: glove-web < 1.0.0
-Recommends: wl-clipboard curl
+Recommends: wl-clipboard curl gstreamer1-plugin-libav pipewire-gstreamer
 %global debug_package %{nil}
 %description
-The browser of the Glove desktop: the Chromium engine (CEF) with Glove's own window,
-tabs, address bar and pages (start page, errors), in the classic or the modern look.
-Light for modest computers: no GPU process, few page processes, nothing running in the
-background.
+The browser of the Glove desktop: the system WebKitGTK engine (kept up to date by the
+distribution) with Glove's own window, tabs, address bar and pages, in the classic or the
+modern look. Video codecs come from GStreamer (H.264 by OpenH264; the full set with the
+RPM Fusion gstreamer1-plugin-libav).
 
 %install
 cp -a $raiz/. %{buildroot}/

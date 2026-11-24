@@ -161,7 +161,8 @@ pub fn pagina_inicial(dir: &Path, fonts: &Fonts, escuro: bool, busca: &str, favo
 }
 
 /// A página de erro (o site não abriu), como endereço data: para o motor mostrar.
-pub fn pagina_erro(fonts: &Fonts, escuro: bool, url: &str, codigo: &str) -> String {
+/// A página de erro (o HTML: o motor a mostra no lugar do endereço que falhou).
+pub fn html_erro(fonts: &Fonts, escuro: bool, url: &str, codigo: &str) -> String {
     let host = url.split("//").nth(1).unwrap_or(url).split('/').next().unwrap_or(url);
     let html = format!(
         "<!doctype html><html><head><meta charset=\"utf-8\"><title>{titulo}</title><style>{css}</style></head><body><main><div class=erro>\
@@ -176,7 +177,7 @@ pub fn pagina_erro(fonts: &Fonts, escuro: bool, url: &str, codigo: &str) -> Stri
         tentar = esc(glove_config::tr!("Tentar de Novo")),
         rodape = rodape(fonts),
     );
-    format!("data:text/html;charset=utf-8;base64,{}", base64(html.as_bytes()))
+    html
 }
 
 #[cfg(test)]

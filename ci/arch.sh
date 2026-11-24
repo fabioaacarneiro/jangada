@@ -3,10 +3,10 @@
 set -e
 cd "$(dirname "$0")/.."
 . ci/comum.sh
-pacman -Syu --noconfirm --needed base-devel cmake rust pkgconf curl zstd git fontconfig ttf-dejavu \
-    libxkbcommon libinput mesa libdrm wayland nss nspr atk at-spi2-atk libcups libxcomposite libxdamage \
-    libxrandr libxext libxfixes libx11 libxcb pango cairo alsa-lib dbus expat systemd-libs glib2
+pacman -Syu --noconfirm --needed base-devel rust pkgconf curl zstd git fontconfig ttf-dejavu \
+    libxkbcommon systemd-libs webkitgtk-6.0 gtk4 glib2
 ./empacotar-arch.sh
 ls pacotes/jangada-*.pkg.tar.zst
+# O pacman instala as dependências do pacote (os plugins do GStreamer etc.).
 pacman -U --noconfirm pacotes/jangada-*.pkg.tar.zst
 conferir

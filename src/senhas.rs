@@ -1,8 +1,8 @@
 //! O gerenciador de senhas da Jangada: as senhas ficam no chaveiro do sistema (veja
 //! `chaveiro`). Na página, um script pequeno avisa quando há um campo de senha (a Jangada
 //! preenche com a senha guardada do site) e quando um formulário com senha é enviado (a
-//! Jangada oferece guardar). A conversa com a página é pelo console, com uma marca que
-//! muda a cada vez que a Jangada abre.
+//! Jangada oferece guardar). O script roda num mundo isolado (a página não o vê) e fala
+//! com a Jangada pelo canal dele, com uma marca que muda a cada vez que a Jangada abre.
 
 use std::cell::RefCell;
 use std::sync::OnceLock;
@@ -43,10 +43,10 @@ pub fn script_da_pagina(url: &str) -> Option<String> {
         r#"(function(){{if(window.__jangadaSenhas)return;window.__jangadaSenhas=1;var M={m};
 function senha(r){{return (r||document).querySelector('input[type=password]')}}
 function usuario(p){{var l=Array.prototype.slice.call(document.querySelectorAll('input'));var i=l.indexOf(p);for(var k=i-1;k>=0;k--){{var t=(l[k].type||'text').toLowerCase();if((t=='text'||t=='email'||t=='tel')&&l[k].offsetParent!==null)return l[k]}}return null}}
-var pedido=false;function pedir(){{if(!pedido&&senha()){{pedido=true;console.debug(M+'p');if(obs)obs.disconnect()}}}}
+var pedido=false;function pedir(){{if(!pedido&&senha()){{pedido=true;window.webkit.messageHandlers.jangada.postMessage(M+'p');if(obs)obs.disconnect()}}}}
 var tp=null,obs=new MutationObserver(function(){{if(tp)return;tp=setTimeout(function(){{tp=null;pedir()}},1000)}});
 pedir();if(!pedido)obs.observe(document.documentElement,{{childList:true,subtree:true}});
-var ultimo='';function avisar(){{var p=senha();if(!p||!p.value)return;var u=usuario(p);var v=(u?u.value:'')+'\u0002'+p.value;if(v==ultimo)return;ultimo=v;console.debug(M+'g'+v)}}
+var ultimo='';function avisar(){{var p=senha();if(!p||!p.value)return;var u=usuario(p);var v=(u?u.value:'')+'\u0002'+p.value;if(v==ultimo)return;ultimo=v;window.webkit.messageHandlers.jangada.postMessage(M+'g'+v)}}
 document.addEventListener('submit',avisar,true);
 document.addEventListener('click',function(e){{var b=e.target&&e.target.closest&&e.target.closest('button,input[type=submit],[role=button]');if(b)setTimeout(avisar,0)}},true);
 document.addEventListener('keydown',function(e){{if(e.key=='Enter'&&e.target&&e.target.tagName=='INPUT')avisar()}},true);
