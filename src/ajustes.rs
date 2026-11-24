@@ -1,8 +1,11 @@
 //! Os ajustes da Jangada (Preferências), os favoritos, o histórico e as abas da última
 //! vez, em arquivos de texto simples em ~/.config/jangada.
 
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+use glove_ui::gtk::glib;
 
 /// Buscadores: (nome, endereço da busca, começo da página).
 pub const BUSCADORES: [(&str, &str); 6] = [
@@ -169,21 +172,63 @@ pub fn gravar_favoritos(v: &[(String, String)]) {
     gravar_lista("favoritos.tsv", v);
 }
 
+thread_local! {
+    /// As visitas à espera de gravação (título, endereço), da mais velha para a mais nova.
+    static VISITAS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    static VISITAS_AGENDADAS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Quanto as visitas esperam antes de irem para o arquivo.
+const ESPERA_DAS_VISITAS: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// O histórico, do mais novo para o mais velho.
 pub fn historico() -> Vec<(String, String)> {
+    gravar_visitas();
     ler_lista("historico.tsv")
 }
 
-/// Uma visita: vai para o topo (sem repetir o endereço), no máximo 2000.
+/// Uma visita: vai para o topo (sem repetir o endereço), no máximo 2000. A gravação
+/// espera um instante e junta o que chegar: um site que troca o título o tempo todo
+/// (aviso de mensagem nova, contador) regravava o arquivo inteiro a cada troca.
 pub fn visitar(titulo: &str, url: &str) {
-    if url.is_empty() || url.starts_with("data:") || url.starts_with("file:") || url.starts_with("devtools:") {
+    if privada() || url.is_empty() || url.starts_with("data:") || url.starts_with("file:") || url.starts_with("devtools:") {
         return;
     }
-    let mut v = historico();
-    v.retain(|(_, u)| u != url);
-    v.insert(0, (titulo.to_string(), url.to_string()));
+    anotar_visita(titulo, url);
+    if !VISITAS_AGENDADAS.with(|a| a.replace(true)) {
+        glib::timeout_add_local_once(ESPERA_DAS_VISITAS, || {
+            VISITAS_AGENDADAS.with(|a| a.set(false));
+            gravar_visitas();
+        });
+    }
+}
+
+/// A visita entra na fila (a mais nova do mesmo endereço fica no lugar da anterior).
+fn anotar_visita(titulo: &str, url: &str) {
+    VISITAS.with(|v| {
+        let mut v = v.borrow_mut();
+        v.retain(|(_, u)| u != url);
+        v.push((titulo.to_string(), url.to_string()));
+    });
+}
+
+/// As visitas da fila no histórico dado (a mais nova no topo, sem repetir, até 2000).
+fn juntar_visitas(mut v: Vec<(String, String)>, novas: Vec<(String, String)>) -> Vec<(String, String)> {
+    for (t, u) in novas {
+        v.retain(|(_, x)| *x != u);
+        v.insert(0, (t, u));
+    }
     v.truncate(2000);
-    gravar_lista("historico.tsv", &v);
+    v
+}
+
+/// Grava as visitas à espera (também antes de ler o histórico e ao fechar a Jangada).
+pub fn gravar_visitas() {
+    let novas = VISITAS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+    if novas.is_empty() {
+        return;
+    }
+    gravar_lista("historico.tsv", &juntar_visitas(ler_lista("historico.tsv"), novas));
 }
 
 /// As permissões guardadas dos sites (um por linha: origem, tipo, permitido 1/0).
@@ -251,6 +296,7 @@ pub fn juntar_historico(novas: &[(String, String)]) -> usize {
 }
 
 pub fn limpar_historico() {
+    VISITAS.with(|v| v.borrow_mut().clear());
     let _ = std::fs::remove_file(pasta().join("historico.tsv"));
 }
 
@@ -309,4 +355,23 @@ pub fn gravar_escudos_fora(v: &std::collections::HashSet<String>) {
     l.sort();
     let t: String = l.iter().map(|s| format!("{s}\n")).collect();
     let _ = std::fs::write(pasta().join("escudos-fora.txt"), t);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn visitas_juntas_numa_gravacao() {
+        // Um site que troca o título o tempo todo: fica só o último, uma vez.
+        for n in 1..=50 {
+            anotar_visita(&format!("Mensagem nova ({n})"), "https://chat.exemplo/");
+        }
+        anotar_visita("Outra", "https://outra.exemplo/");
+        let fila = VISITAS.with(|v| std::mem::take(&mut *v.borrow_mut()));
+        assert_eq!(fila.len(), 2);
+        let velho = vec![("Antiga".to_string(), "https://antiga.exemplo/".to_string()), ("Chat".to_string(), "https://chat.exemplo/".to_string())];
+        let h = juntar_visitas(velho, fila);
+        assert_eq!(h.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["Outra", "Mensagem nova (50)", "Antiga"]);
+    }
 }

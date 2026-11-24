@@ -15,7 +15,7 @@ use std::rc::Rc;
 use glove_ui::gtk::{self, gdk, gio, glib, prelude::*};
 use webkit6::prelude::*;
 use webkit6::{
-    CookieAcceptPolicy, CookiePersistentStorage, Download, FindOptions, HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NetworkSession, PermissionRequest, PolicyDecisionType, PrintOperation, ScriptDialog, ScriptDialogType, Settings, UserContentFilter, UserContentInjectedFrames, UserContentManager, UserStyleLevel, UserStyleSheet, WebContext, WebView,
+    CookieAcceptPolicy, CookiePersistentStorage, Download, FindOptions, HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NetworkSession, PermissionRequest, PolicyDecisionType, PrintOperation, ResponsePolicyDecision, ScriptDialog, ScriptDialogType, Settings, UserContentFilter, UserContentInjectedFrames, UserContentManager, UserStyleLevel, UserStyleSheet, WebContext, WebView,
 };
 
 /// O mundo isolado dos scripts da Jangada (e o nome do canal deles para cá).
@@ -53,6 +53,11 @@ pub struct Pagina {
     pub fonte: bool,
     /// Onde o mouse está na página (o menu de contexto abre ali).
     pub mouse: (f32, f32),
+    /// A página pediu para fechar a própria aba (window.close()).
+    pub fechar: bool,
+    /// A aba divide o processo de página com outra: ela abriu uma janela (window.open,
+    /// target=_blank) ou foi aberta assim. Ao fechar, o processo dela não pode ser morto.
+    pub parentes: Rc<Cell<bool>>,
     /// O que já foi notado mudar (a janela redesenha quando muda).
     pub versao: u64,
 }
@@ -87,6 +92,8 @@ pub struct Download_ {
     pub velocidade: i64,
     pub pronto: bool,
     pub cancelado: bool,
+    /// Parou por erro (sem espaço, sem permissão na pasta, a rede caiu), não por escolha.
+    pub falhou: bool,
     /// Para cancelar enquanto baixa.
     pub dl: Option<Download>,
     /// Para calcular a velocidade: (quando, quanto).
@@ -272,7 +279,9 @@ pub fn nova_aba(url: &str, relacionada: Option<&WebView>) -> Option<Shared> {
 
 /// Uma aba que o motor já criou (window.open): só liga os sinais.
 pub fn aba_criada(view: WebView, url: &str) -> Shared {
-    preparar(view, url)
+    let p = preparar(view, url);
+    p.borrow().parentes.set(true);
+    p
 }
 
 fn preparar(view: WebView, url: &str) -> Shared {
@@ -296,6 +305,8 @@ fn preparar(view: WebView, url: &str) -> Shared {
         tela_cheia: false,
         fonte: false,
         mouse: (0.0, 0.0),
+        fechar: false,
+        parentes: Rc::new(Cell::new(false)),
         versao: 0,
     }));
     ABAS.with(|a| a.borrow_mut().push(Rc::downgrade(&p)));
@@ -408,13 +419,18 @@ fn ligar(p: &Shared, view: &WebView) {
         // Antes do motor (ele fica com os eventos dele).
         m.set_propagation_phase(gtk::PropagationPhase::Capture);
         let fraco = fraco.clone();
-        m.connect_motion(move |_, x, y| {
+        let anota = move |x: f64, y: f64| {
             if let Some(p) = fraco.upgrade() {
                 if let Ok(mut p) = p.try_borrow_mut() {
                     p.mouse = (x as f32, y as f32);
                 }
             }
-        });
+        };
+        // Ao entrar também: com o mouse parado sobre uma aba que acabou de aparecer (ou
+        // vindo das barras num pulo só) não há "mexeu", e o menu abria no canto da página.
+        let anota2 = anota.clone();
+        m.connect_enter(move |_, x, y| anota2(x, y));
+        m.connect_motion(move |_, x, y| anota(x, y));
         view.add_controller(m);
     }
     // O menu de contexto: o da Jangada (o do motor não aparece).
@@ -455,14 +471,16 @@ fn ligar(p: &Shared, view: &WebView) {
         let fraco = fraco.clone();
         view.connect_script_dialog(move |_, d| {
             let t = d.dialog_type();
+            // Estes dois são respondidos na hora. Nada de `close()` aqui dentro: o motor
+            // solta o diálogo sozinho quando o sinal volta, e fechá-lo antes derrubava a
+            // Jangada inteira (qualquer página com prompt() ou com aviso de sair).
             if t == ScriptDialogType::Prompt {
-                d.close();
+                // Sem resposta: a página recebe "cancelado" (nulo).
                 return true;
             }
             if t == ScriptDialogType::BeforeUnloadConfirm {
                 // Sair da página sempre pode (como fechar a aba).
                 d.confirm_set_confirmed(true);
-                d.close();
                 return true;
             }
             let Some(p) = fraco.upgrade() else { return false };
@@ -477,8 +495,15 @@ fn ligar(p: &Shared, view: &WebView) {
         let v = view.clone();
         view.connect_permission_request(move |_, req| pedido_de_permissao(&v, req));
     }
+    // window.close(): a página pediu para fechar a própria aba (o motor só deixa as
+    // que a página abriu, como as janelinhas de login).
+    {
+        let c = com_pagina.clone();
+        view.connect_close(move |_| c(&|p| p.fechar = true));
+    }
     // Janela nova pedida pela página (window.open, target=_blank): vira uma aba.
     {
+        let parentes = p.borrow().parentes.clone();
         view.connect_create(move |v, acao| {
             let url = acao.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
             let sozinha = !acao.is_user_gesture() && crate::ajustes::BLOQUEAR_JANELAS.load(std::sync::atomic::Ordering::Relaxed);
@@ -491,6 +516,8 @@ fn ligar(p: &Shared, view: &WebView) {
                 let ucm = conteudo(m);
                 WebView::builder().related_view(v).user_content_manager(&ucm).settings(&m.ajustes).build()
             })?;
+            // A nova divide o processo com esta.
+            parentes.set(true);
             let fundo = acao.mouse_button() == 2;
             NOVAS_ABAS.with(|n| n.borrow_mut().push((url, fundo, Some(nova.clone()))));
             glove_ui::redraw_soon();
@@ -500,6 +527,16 @@ fn ligar(p: &Shared, view: &WebView) {
     // Botão do meio ou Ctrl + clique num link: aba nova por trás.
     {
         view.connect_decide_policy(move |_, d, tipo| {
+            // A resposta chegou e o motor não sabe mostrar o tipo (um .zip, um .deb, um
+            // application/octet-stream): é um download. Sem isto o motor só baixava o que
+            // viesse marcado como anexo, e o resto era ignorado sem aviso.
+            if tipo == PolicyDecisionType::Response {
+                if d.downcast_ref::<ResponsePolicyDecision>().is_some_and(|r| !r.is_mime_type_supported()) {
+                    d.download();
+                    return true;
+                }
+                return false;
+            }
             if tipo != PolicyDecisionType::NavigationAction && tipo != PolicyDecisionType::NewWindowAction {
                 return false;
             }
@@ -534,7 +571,8 @@ fn ligar(p: &Shared, view: &WebView) {
                 return;
             }
             let url = v.uri().map(|u| u.to_string()).unwrap_or_default();
-            for js in [crate::senhas::script_da_pagina(&url), crate::extensoes::script_para(&url)].into_iter().flatten() {
+            // Um por vez: um erro de escrita no script de uma extensão não leva os outros.
+            for js in crate::senhas::script_da_pagina(&url).into_iter().chain(crate::extensoes::scripts_para(&url)) {
                 v.evaluate_javascript(&js, Some(MUNDO), Some(&url), None::<&gio::Cancellable>, |_| {});
             }
         });
@@ -622,15 +660,29 @@ fn mensagem(view: &WebView, m: &str) {
     }
     if let Some(pedido) = crate::senhas::ler(m) {
         let origem = crate::importar::origem(&url);
+        // O chaveiro responde por outra linha de execução: se ele demora (trancado, à
+        // espera da senha da pessoa), a Jangada não congela.
         match pedido {
             crate::senhas::Pedido::Preencher => {
-                if let Some(js) = crate::senhas::script_preencher(&origem) {
-                    view.evaluate_javascript(&js, Some(MUNDO), None, None::<&gio::Cancellable>, |_| {});
-                }
+                let v = view.clone();
+                glib::spawn_future_local(async move {
+                    let o = origem.clone();
+                    let Ok(Some(js)) = gio::spawn_blocking(move || crate::senhas::script_preencher(&o)).await else { return };
+                    // A página pode ter ido para outro site enquanto o chaveiro respondia.
+                    let agora = crate::importar::origem(&v.uri().map(|u| u.to_string()).unwrap_or_default());
+                    if agora == origem {
+                        v.evaluate_javascript(&js, Some(MUNDO), None, None::<&gio::Cancellable>, |_| {});
+                    }
+                });
             }
             crate::senhas::Pedido::Guardar(u, s) => {
-                crate::senhas::enviado(&origem, &u, &s);
-                glove_ui::redraw_soon();
+                glib::spawn_future_local(async move {
+                    let (o, u2, s2) = (origem.clone(), u.clone(), s.clone());
+                    if let Ok(true) = gio::spawn_blocking(move || crate::senhas::e_nova(&o, &u2, &s2)).await {
+                        crate::senhas::oferecer(&origem, &u, &s);
+                        glove_ui::redraw_soon();
+                    }
+                });
             }
         }
     }
@@ -706,11 +758,15 @@ fn notificar(titulo: &str, corpo: &str) {
 
 fn novo_download(d: &Download) {
     let id = PROXIMO_DOWNLOAD.with(|n| n.replace(n.get() + 1));
-    DOWNLOADS.with(|l| l.borrow_mut().push(Baixado { id, nome: String::new(), caminho: PathBuf::new(), recebido: 0, total: 0, velocidade: 0, pronto: false, cancelado: false, dl: Some(d.clone()), marca: (std::time::Instant::now(), 0) }));
+    DOWNLOADS.with(|l| l.borrow_mut().push(Baixado { id, nome: String::new(), caminho: PathBuf::new(), recebido: 0, total: 0, velocidade: 0, pronto: false, cancelado: false, falhou: false, dl: Some(d.clone()), marca: (std::time::Instant::now(), 0) }));
     // Vai direto para a pasta Downloads (sem perguntar), com um nome livre.
     d.connect_decide_destination(move |d, sugerido| {
         let nome = if sugerido.is_empty() { "download".to_string() } else { sugerido.replace('/', "_") };
-        let path = livre(&crate::pasta_downloads().join(&nome));
+        // A pasta Downloads pode não existir ainda (conta nova): sem ela, o motor
+        // desistia do download na hora.
+        let pasta = crate::pasta_downloads();
+        let _ = std::fs::create_dir_all(&pasta);
+        let path = livre(&pasta.join(&nome));
         d.set_destination(&path.to_string_lossy());
         let n = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(nome);
         atualizar(id, |x| {
@@ -750,10 +806,21 @@ fn novo_download(d: &Download) {
             AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Baixado em Downloads: {}", nome)));
         }
     });
-    d.connect_failed(move |_, _| atualizar(id, |x| {
-        x.cancelado = true;
-        x.dl = None;
-    }));
+    d.connect_failed(move |_, _| {
+        // Cancelar também chega aqui: só é falha se ninguém cancelou.
+        let mut falhou = None;
+        atualizar(id, |x| {
+            if !x.cancelado {
+                x.falhou = true;
+                falhou = Some(x.nome.clone());
+            }
+            x.cancelado = true;
+            x.dl = None;
+        });
+        if let Some(nome) = falhou {
+            AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Não foi possível baixar {}", if nome.is_empty() { "download".to_string() } else { nome })));
+        }
+    });
 }
 
 fn atualizar(id: u32, f: impl FnOnce(&mut Baixado)) {
@@ -883,6 +950,21 @@ pub fn apagar_dados() {
     dm.clear(webkit6::WebsiteDataTypes::ALL, glib::TimeSpan::from_seconds(0), None::<&gio::Cancellable>, |_| {});
 }
 
+/// Fecha a página de uma aba que já saiu da janela. O processo de página de uma aba
+/// comum é só dela e é encerrado na hora (a memória volta já; sem isso o motor o deixa
+/// guardado por um bom tempo). `divide_o_processo`: a aba abriu ou foi aberta por outra
+/// (window.open, login em janelinha) e as duas usam o mesmo processo: matá-lo derrubava a
+/// outra, então aqui a página só é fechada, e o motor solta o processo quando ninguém
+/// mais o usa.
+pub fn fechar_pagina(view: &WebView, divide_o_processo: bool) {
+    if !divide_o_processo {
+        view.terminate_web_process();
+    }
+    // Segurança: a aba saiu da janela e ninguém a usa depois daqui (os sinais dela são
+    // desligados aqui mesmo; a Jangada só solta a referência em seguida).
+    unsafe { view.run_dispose() };
+}
+
 /// Liga ou desliga o inspetor do motor (as Ferramentas do Desenvolvedor).
 pub fn ferramentas_dev(ligadas: bool) {
     com(|m| m.ajustes.set_enable_developer_extras(ligadas));
@@ -920,10 +1002,15 @@ pub fn codigo_fonte(view: &WebView, destino: Shared) {
         let esc = texto.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
         let titulo = glove_config::tr!("Código-fonte de {}", url).replace('<', "&lt;");
         let html = format!("<!doctype html><meta charset=utf-8><title>{titulo}</title><style>body{{margin:0;background:#fff;color:#1d1d1f}}pre{{margin:0;padding:12px 16px;font:12px/1.5 monospace;white-space:pre-wrap;word-break:break-all}}@media(prefers-color-scheme:dark){{body{{background:#1e1e1e;color:#ddd}}}}</style><pre>{esc}</pre>");
-        let mut p = destino.borrow_mut();
-        p.fonte = true;
-        p.url = format!("view-source:{url}");
-        p.view.load_html(&html, None);
-        p.mudou();
+        // O empréstimo acaba antes de falar com o motor: ele avisa na hora (carregando,
+        // endereço), e com a página ainda emprestada esses avisos se perdiam.
+        let v = {
+            let mut p = destino.borrow_mut();
+            p.fonte = true;
+            p.url = format!("view-source:{url}");
+            p.mudou();
+            p.view.clone()
+        };
+        v.load_html(&html, None);
     });
 }

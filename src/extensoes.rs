@@ -1,14 +1,18 @@
-//! As extensões da Jangada, no formato do Chrome (Manifest V3, o que a Jangada implementa):
-//! uma pasta com `manifest.json`, scripts e CSS de conteúdo que rodam nas páginas que
-//! batem com `matches`, e a API mínima `chrome.runtime` e `chrome.storage`.
+//! As extensões da Jangada: um formato próprio e pequeno. Uma pasta com `manifest.json`,
+//! scripts (JavaScript) e CSS que entram nas páginas que batem com `matches`, e uma API
+//! mínima para o script: `jangada.storage.local` e `jangada.runtime.id` (o mesmo objeto
+//! atende por `chrome`, para quem traz um script escrito para o Chrome). O manifesto usa
+//! os nomes de campo do Chrome (Manifest V3), mas isto NÃO roda as extensões da loja do
+//! Chrome: não há script de fundo, janela de ação, páginas de opções nem as outras APIs.
+//! O guia de quem escreve uma extensão está em docs/EXTENSOES.md.
 //!
 //! Instala-se de uma pasta, de um `.zip` ou de um repositório do GitHub (pela linha de
-//! comando, `jangada --instalar`, ou em Preferências ▸ Extensões). Antes de instalar, a
-//! Jangada mostra as permissões que a extensão pede.
+//! comando, `jangada --instalar`, ou em Preferências ▸ Instaladas). Antes de instalar, a
+//! Jangada mostra o que a extensão pede.
 //!
-//! Limitação: o script de conteúdo roda no mesmo mundo da página (não isolado, como no
-//! Chrome): ele enxerga as variáveis da página. Não há script de fundo nem as outras APIs
-//! do Chrome ainda.
+//! Os scripts rodam quando a página termina de carregar, no quadro principal, num mundo
+//! isolado (o "jangada", o mesmo dos scripts da própria Jangada): veem o documento, mas
+//! não as variáveis da página, e a página não os vê.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -43,10 +47,42 @@ pub struct Regra {
 }
 
 fn pasta_extensoes() -> PathBuf {
-    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let p = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("jangada/extensoes");
+    // Nos testes, uma pasta à parte: nunca a das extensões da pessoa.
+    #[cfg(test)]
+    let p = std::env::temp_dir().join(format!("jangada-extensoes-de-teste-{}", std::process::id()));
+    #[cfg(not(test))]
+    let p = {
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("jangada/extensoes")
+    };
     let _ = std::fs::create_dir_all(&p);
     p
+}
+
+/// O nome de pasta de uma extensão nova: o nome dela em letras simples ("Olá, Jangada" →
+/// "ola-jangada") e um pedaço do manifesto (duas de nomes parecidos não se misturam).
+fn id_para(nome: &str, manifesto: &str) -> String {
+    let mut slug = String::new();
+    for c in nome.to_lowercase().chars() {
+        let c = match c {
+            'á' | 'à' | 'â' | 'ã' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ç' => 'c',
+            'ñ' => 'n',
+            c if c.is_ascii_alphanumeric() => c,
+            _ => '-',
+        };
+        if c != '-' || !(slug.is_empty() || slug.ends_with('-')) {
+            slug.push(c);
+        }
+    }
+    let slug = slug.trim_matches('-');
+    let mut h = DefaultHasher::new();
+    manifesto.hash(&mut h);
+    format!("{}-{:08x}", if slug.is_empty() { "extensao" } else { slug }, h.finish() as u32)
 }
 
 fn ativas_arquivo() -> PathBuf {
@@ -95,30 +131,36 @@ pub fn ler(pasta: &Path) -> Result<Extensao, String> {
             }
         }
     }
-    let mut h = DefaultHasher::new();
-    texto.hash(&mut h);
-    let slug: String = nome.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>().trim_matches('-').to_string();
-    let id = format!("{}-{:08x}", if slug.is_empty() { "extensao" } else { &slug }, h.finish() as u32);
+    let id = id_para(&nome, &texto);
     Ok(Extensao { id: id.clone(), nome, versao, descricao, pasta: pasta.to_path_buf(), regras, permissoes, ativa: !desativadas().contains(&id) })
 }
 
-/// As extensões instaladas.
+/// As extensões instaladas. A identidade de uma instalada é o nome da pasta dela (os
+/// dados guardados ficam ali): não muda quando o manifesto muda.
 pub fn listar() -> Vec<Extensao> {
     let mut v: Vec<Extensao> = std::fs::read_dir(pasta_extensoes())
         .into_iter()
         .flatten()
         .flatten()
         .filter(|e| e.path().join("manifest.json").is_file())
-        .filter_map(|e| ler(&e.path()).ok())
+        .filter_map(|e| {
+            let mut x = ler(&e.path()).ok()?;
+            x.id = e.file_name().to_string_lossy().into_owned();
+            x.ativa = !desativadas().contains(&x.id);
+            Some(x)
+        })
         .collect();
     v.sort_by(|a, b| a.nome.to_lowercase().cmp(&b.nome.to_lowercase()));
     v
 }
 
-/// Copia uma extensão preparada para a pasta de instalação (trocando a versão anterior, se
-/// houver). Mantém os dados guardados dela (storage.json).
+/// Copia uma extensão preparada para a pasta de instalação. Uma instalada com o mesmo
+/// nome é a versão anterior: a nova entra no lugar dela (mesma pasta, mesmos dados
+/// guardados em storage.json), mesmo que o manifesto tenha mudado. Antes, mudar o
+/// manifesto e instalar de novo deixava as duas instaladas, e o script rodava duas vezes.
 pub fn instalar(e: &Extensao) -> Result<Extensao, String> {
-    let destino = pasta_extensoes().join(&e.id);
+    let id = listar().into_iter().find(|i| i.nome == e.nome).map(|i| i.id).unwrap_or_else(|| e.id.clone());
+    let destino = pasta_extensoes().join(&id);
     let guardado = destino.join("storage.json");
     let dados = std::fs::read(&guardado).ok();
     let _ = std::fs::remove_dir_all(&destino);
@@ -126,7 +168,12 @@ pub fn instalar(e: &Extensao) -> Result<Extensao, String> {
     if let Some(d) = dados {
         let _ = std::fs::write(destino.join("storage.json"), d);
     }
+    // Instalar é querer usar: uma que estava desligada volta ligada.
+    if desativadas().contains(&id) {
+        alternar(&id);
+    }
     let mut inst = ler(&destino)?;
+    inst.id = id;
     inst.ativa = true;
     Ok(inst)
 }
@@ -321,11 +368,12 @@ fn js_str(t: &str) -> String {
     serde_json::to_string(t).unwrap_or_else(|_| "\"\"".into()).replace('<', "\\u003c")
 }
 
-/// O código que a Jangada injeta numa página: para cada extensão ativa com uma regra que
-/// bate com o endereço, o CSS e os scripts, cada um com o `chrome` da própria extensão.
-/// None se nenhuma extensão se aplica.
-pub fn script_para(url: &str) -> Option<String> {
-    let mut partes = String::new();
+/// O que a Jangada injeta numa página: para cada extensão ativa com uma regra que bate
+/// com o endereço, o CSS e os scripts, na ordem do manifesto. Cada pedaço é avaliado à
+/// parte (um erro de escrita num script não leva os outros) e cada script recebe a API
+/// da própria extensão, como `jangada` e como `chrome`. Vazio se nenhuma se aplica.
+pub fn scripts_para(url: &str) -> Vec<String> {
+    let mut partes = Vec::new();
     for e in listar().into_iter().filter(|e| e.ativa) {
         for r in &e.regras {
             if !r.matches.iter().any(|m| casa(m, url)) {
@@ -333,30 +381,30 @@ pub fn script_para(url: &str) -> Option<String> {
             }
             for c in &r.css {
                 if let Ok(t) = std::fs::read_to_string(e.pasta.join(c)) {
-                    partes.push_str(&format!("(function(){{var s=document.createElement('style');s.textContent={};(document.head||document.documentElement).appendChild(s)}})();\n", js_str(&t)));
+                    partes.push(format!("(function(){{var s=document.createElement('style');s.textContent={};(document.head||document.documentElement).appendChild(s)}})();", js_str(&t)));
                 }
             }
             for j in &r.js {
                 if let Ok(t) = std::fs::read_to_string(e.pasta.join(j)) {
-                    // Cada script roda com o `chrome` da extensão (um pedaço de API por extensão).
-                    partes.push_str(&format!("(function(chrome){{try{{\n{t}\n}}catch(e){{console.error('{}: '+e)}}}})({});\n", e.nome.replace('\'', ""), chrome_de(&e.id)));
+                    partes.push(format!("(function(jangada){{var chrome=jangada;try{{\n{t}\n}}catch(e){{console.error({}+': '+e)}}}})({});", js_str(&format!("{} ({j})", e.nome)), api_de(&e.id)));
                 }
             }
         }
     }
-    if partes.is_empty() {
-        return None;
-    }
-    Some(format!("(function(){{{}}})();", partes.replace("</script", "<\\/script")).to_string())
+    partes
 }
 
-/// O objeto `chrome` mínimo de uma extensão (executado na página): runtime.id e getURL,
-/// storage.local (get, set, remove, que vão para a Jangada pelo canal do mundo isolado).
-fn chrome_de(id: &str) -> String {
+/// A API de uma extensão (o objeto `jangada`, que também atende por `chrome`), montada
+/// na página: runtime.id e storage.local (get, set, remove e clear, que vão para a
+/// Jangada pelo canal do mundo isolado). Os pedidos à espera e o número deles são um só
+/// para o mundo inteiro: com um por script, as respostas do segundo script da página
+/// (outro arquivo, outra extensão) iam para o primeiro e nunca chegavam.
+fn api_de(id: &str) -> String {
     format!(
-        "(function(){{var id={};var pend={{}},n=0;window.__jangadaResposta=window.__jangadaResposta||function(k,d){{var f=pend[k];if(f){{delete pend[k];f(d)}}}};\
-function op(t,d,cb){{var k=++n;var p=new Promise(function(res){{pend[k]=function(r){{if(cb)cb(r);res(r)}}}});window.webkit.messageHandlers.jangada.postMessage({marca}+JSON.stringify({{ext:id,op:t,k:k,d:d}}));return p}}\
-var local={{get:function(c,cb){{return op('get',c==null?null:c,cb)}},set:function(o,cb){{return op('set',o,cb)}},remove:function(c,cb){{return op('remove',c,cb)}}}};\
+        "(function(){{var id={};var W=window;W.__jangadaPend=W.__jangadaPend||{{}};W.__jangadaN=W.__jangadaN||0;\
+W.__jangadaResposta=W.__jangadaResposta||function(k,d){{var f=W.__jangadaPend[k];if(f){{delete W.__jangadaPend[k];f(d)}}}};\
+function op(t,d,cb){{var k=++W.__jangadaN;var p=new Promise(function(res){{W.__jangadaPend[k]=function(r){{if(typeof cb=='function')cb(r);res(r)}}}});W.webkit.messageHandlers.jangada.postMessage({marca}+JSON.stringify({{ext:id,op:t,k:k,d:d}}));return p}}\
+var local={{get:function(c,cb){{if(typeof c=='function'){{cb=c;c=null}}return op('get',c==null?null:c,cb)}},set:function(o,cb){{return op('set',o,cb)}},remove:function(c,cb){{return op('remove',c,cb)}},clear:function(cb){{return op('clear',null,cb)}}}};\
 var listener={{addListener:function(){{}},removeListener:function(){{}},hasListener:function(){{return false}}}};\
 return {{runtime:{{id:id,getURL:function(p){{return 'jangada-extension://'+id+'/'+String(p||'').replace(/^\\//,'')}},onMessage:listener,lastError:null}},storage:{{local:local,onChanged:listener}}}}}})()",
         js_str(id),
@@ -364,8 +412,17 @@ return {{runtime:{{id:id,getURL:function(p){{return 'jangada-extension://'+id+'/
     )
 }
 
+/// O nome de pasta de uma extensão instalada (o `ext` de um pedido vem do script: nada
+/// de caminhos, só uma extensão que existe).
+fn instalada(id: &str) -> bool {
+    !id.is_empty() && !id.starts_with('.') && !id.contains(['/', '\\']) && pasta_extensoes().join(id).join("manifest.json").is_file()
+}
+
 /// A operação de storage pedida pela página (ext, op, dados) → o valor de volta.
 pub fn armazenar(id: &str, op: &str, dados: &Value) -> Value {
+    if !instalada(id) {
+        return json!({});
+    }
     let arq = pasta_extensoes().join(id).join("storage.json");
     let mut mapa: serde_json::Map<String, Value> = std::fs::read_to_string(&arq).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let resposta = match op {
@@ -415,6 +472,10 @@ pub fn armazenar(id: &str, op: &str, dados: &Value) -> Value {
             let _ = std::fs::write(&arq, serde_json::to_string(&mapa).unwrap_or_default());
             json!({})
         }
+        "clear" => {
+            let _ = std::fs::write(&arq, "{}");
+            json!({})
+        }
         _ => json!({}),
     };
     resposta
@@ -444,6 +505,38 @@ mod tests {
     }
 
     #[test]
+    fn nome_de_pasta_da_extensao() {
+        assert!(id_para("Olá, Jangada", "{}").starts_with("ola-jangada-"));
+        assert!(id_para("Destaque de exemplo", "{}").starts_with("destaque-de-exemplo-"));
+        assert!(id_para("!!!", "{}").starts_with("extensao-"));
+        assert_ne!(id_para("A", "{1}"), id_para("A", "{2}"));
+    }
+
+    #[test]
+    fn instalar_de_novo_troca_a_anterior() {
+        let nome = format!("Teste de troca {}", std::process::id());
+        let fonte = std::env::temp_dir().join(format!("jangada-troca-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&fonte);
+        std::fs::create_dir_all(&fonte).unwrap();
+        let manifesto = |versao: &str| format!(r#"{{"manifest_version":3,"name":"{nome}","version":"{versao}","content_scripts":[{{"matches":["https://exemplo.com/*"],"js":["a.js"]}}]}}"#);
+        std::fs::write(fonte.join("a.js"), "1;").unwrap();
+        std::fs::write(fonte.join("manifest.json"), manifesto("1.0")).unwrap();
+        let um = instalar(&ler(&fonte).unwrap()).unwrap();
+        armazenar(&um.id, "set", &json!({"guardado": true}));
+        // O manifesto mudou (versão nova): continua uma só, na mesma pasta, com os dados.
+        std::fs::write(fonte.join("manifest.json"), manifesto("2.0")).unwrap();
+        let dois = instalar(&ler(&fonte).unwrap()).unwrap();
+        assert_eq!(um.id, dois.id);
+        let minhas: Vec<Extensao> = listar().into_iter().filter(|e| e.nome == nome).collect();
+        assert_eq!(minhas.len(), 1);
+        assert_eq!(minhas[0].versao, "2.0");
+        assert_eq!(armazenar(&dois.id, "get", &Value::Null)["guardado"], true);
+        remover(&dois.id);
+        assert!(listar().iter().all(|e| e.nome != nome));
+        let _ = std::fs::remove_dir_all(&fonte);
+    }
+
+    #[test]
     fn padroes_do_chrome() {
         assert!(casa("<all_urls>", "https://exemplo.com.br/a?b=1"));
         assert!(casa("https://*.exemplo.com/*", "https://www.exemplo.com/x"));
@@ -469,11 +562,18 @@ mod tests {
         let id = format!("teste-{}", std::process::id());
         let dir = pasta_extensoes().join(&id);
         let _ = std::fs::create_dir_all(&dir);
+        // Só uma extensão instalada guarda dados; nada de caminhos no lugar do nome.
+        armazenar(&id, "set", &json!({"n": 3}));
+        assert!(!dir.join("storage.json").exists());
+        std::fs::write(dir.join("manifest.json"), "{}").unwrap();
+        assert!(armazenar(&format!("../extensoes/{id}"), "get", &Value::Null).as_object().is_some_and(|o| o.is_empty()));
         armazenar(&id, "set", &json!({"n": 3, "cor": "azul"}));
         assert_eq!(armazenar(&id, "get", &json!("n"))["n"], 3);
         assert_eq!(armazenar(&id, "get", &json!(["cor"]))["cor"], "azul");
         armazenar(&id, "remove", &json!("n"));
         assert!(armazenar(&id, "get", &Value::Null).get("n").is_none());
+        armazenar(&id, "clear", &Value::Null);
+        assert!(armazenar(&id, "get", &Value::Null).as_object().is_some_and(|o| o.is_empty()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

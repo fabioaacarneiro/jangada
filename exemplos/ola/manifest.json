@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Olá, Jangada",
+  "version": "1.0",
+  "description": "O menor exemplo: um aviso no canto das páginas de example.com.",
+  "content_scripts": [
+    {
+      "matches": ["https://example.com/*"],
+      "js": ["ola.js"]
+    }
+  ]
+}

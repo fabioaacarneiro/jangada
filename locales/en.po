@@ -54,6 +54,9 @@ msgstr "Undo"
 msgid "Diminuir"
 msgstr "Smaller"
 
+msgid "Falhou"
+msgstr "Failed"
+
 msgid "Fechar Aba"
 msgstr "Close Tab"
 
@@ -62,6 +65,9 @@ msgstr "History"
 
 msgid "Nova Aba"
 msgstr "New Tab"
+
+msgid "Não foi possível baixar {}"
+msgstr "Could not download {}"
 
 msgid "Não foi possível abrir a página"
 msgstr "The page could not be opened"

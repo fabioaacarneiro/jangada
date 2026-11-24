@@ -1,7 +1,7 @@
-//! Jangada: o navegador do Glove OS. O motor é o do Chromium (CEF: os recursos da web de
-//! hoje); a janela, as abas, a barra de endereço, as Preferências e as páginas da própria
-//! Jangada (início, erro) são do Glove, no visual clássico ou no moderno. Feita para pesar
-//! pouco: poucos processos de página e nada de fundo.
+//! Jangada: o navegador do Glove OS. O motor é o WebKitGTK do sistema (veja `motor`); a
+//! janela, as abas, a barra de endereço, as Preferências e as páginas da própria Jangada
+//! (início, erro) são do Glove, no visual clássico ou no moderno. Feita para pesar pouco:
+//! a página é desenhada pela placa de vídeo e, parada, a Jangada não gasta processador.
 //!
 //!   jangada [ENDEREÇO…]   abre os endereços (numa janela que já esteja aberta, se houver)
 
@@ -177,6 +177,17 @@ mod tests {
             }
         }
         assert!(faltam.is_empty(), "sem tradução em locales/en.po:\n{}", faltam.join("\n"));
+    }
+
+    #[test]
+    fn janela_cabe_na_tela() {
+        assert_eq!(caber(None, None), (1100, 760));
+        assert_eq!(caber(Some(1920), Some(1080)), (1100, 760));
+        // Um notebook de 1366 × 768: a altura sobra para a barra de menu e o Dock.
+        assert_eq!(caber(Some(1366), Some(768)), (1100, 658));
+        // 1280 × 800 em 150%: 853 × 533 pontos.
+        assert_eq!(caber(Some(853), Some(533)), (829, 423));
+        assert_eq!(caber(Some(400), Some(300)), (560, 380));
     }
 
     #[test]
@@ -433,6 +444,7 @@ impl Navegador {
         if i >= self.abas.len() {
             return;
         }
+        let era_a_escolhida = i == self.atual;
         let a = self.abas.remove(i);
         let url = a.p.borrow().url.clone();
         if !url.is_empty() && !url.starts_with("data:") && !self.eh_inicio(&url) {
@@ -448,21 +460,36 @@ impl Navegador {
         if self.a_vista.as_ref() == Some(&v) {
             self.a_vista = None;
         }
-        v.terminate_web_process();
+        let divide = a.p.borrow().parentes.get();
+        drop(a);
+        motor::fechar_pagina(&v, divide);
         if self.abas.is_empty() {
             self.nova_aba();
-        } else {
+        } else if era_a_escolhida {
             self.mudar(self.atual.min(self.abas.len() - 1));
+        } else {
+            // Fechou outra aba: a escolhida continua a mesma (se a fechada vinha antes
+            // dela, a posição da escolhida anda uma para trás).
+            if i < self.atual {
+                self.atual -= 1;
+            }
+            self.mudou = true;
         }
     }
 
     fn carregar(&mut self, url: &str) {
         let url = endereco(url, &self.inicio, self.aj.busca_url());
-        if let Some(a) = self.aba() {
+        let v = self.aba().map(|a| {
             let mut p = a.p.borrow_mut();
             p.fonte = false;
             p.url = url.clone();
-            p.view.load_uri(&url);
+            p.view.clone()
+        });
+        // Fora do empréstimo: o motor avisa na hora que começou a carregar (ou que o
+        // endereço não presta), e com a página ainda emprestada esses avisos se perdiam:
+        // a barra não mostrava o carregamento nem a página de erro.
+        if let Some(v) = v {
+            v.load_uri(&url);
         }
         self.focar_pagina = true;
     }
@@ -1114,6 +1141,10 @@ impl Navegador {
                 None => self.abrir_em(&u, fundo),
             }
         }
+        // window.close(): a página pediu para fechar a própria aba.
+        while let Some(i) = self.abas.iter().position(|a| a.p.borrow().fechar) {
+            self.fechar(i);
+        }
         if let Some(a) = motor::AVISOS.with(|a| a.borrow_mut().pop()) {
             self.aviso = Some((a, Instant::now()));
         }
@@ -1240,9 +1271,7 @@ impl Navegador {
             "ctx-recarregar" => {
                 self.atalho("Ctrl+R", false);
             }
-            "ctx-pdf" => {
-                self.atalho("Ctrl+P", false);
-            }
+            "ctx-pdf" => self.acao_menu("pdf"),
             _ => {}
         }
     }
@@ -1469,6 +1498,8 @@ impl Navegador {
             l.borrow().iter().rev().map(|d| {
                 let estado = if d.pronto {
                     tr!("Pronto").to_string()
+                } else if d.falhou {
+                    tr!("Falhou").to_string()
                 } else if d.cancelado {
                     tr!("Cancelado").to_string()
                 } else if d.total > 0 {
@@ -2084,8 +2115,9 @@ impl App for Navegador {
     }
 
     fn close_requested(&mut self) -> bool {
-        // As abas da última vez (para "reabrir as abas").
+        // As abas da última vez (para "reabrir as abas") e as visitas ainda à espera.
         self.gravar_sessao();
+        ajustes::gravar_visitas();
         true
     }
 
@@ -2488,6 +2520,25 @@ fn enderecos_da_linha() -> Vec<String> {
     out
 }
 
+/// O tamanho da janela ao abrir: 1100 × 760, ou o que couber na menor tela ligada (num
+/// notebook de 1366 × 768, ou com a tela em 150%, a janela abria maior que a tela).
+fn tamanho_inicial() -> (u32, u32) {
+    use glove_ui::gtk::gdk;
+    let telas: Vec<(i32, i32)> = gdk::Display::default()
+        .map(|d| d.monitors())
+        .map(|m| (0..m.n_items()).filter_map(|i| m.item(i).and_downcast::<gdk::Monitor>()).map(|m| (m.geometry().width(), m.geometry().height())).collect())
+        .unwrap_or_default();
+    caber(telas.iter().map(|t| t.0).min(), telas.iter().map(|t| t.1).min())
+}
+
+/// 1100 × 760 dentro da tela dada (em pontos), com folga para a barra de menu e o Dock;
+/// nunca menor que o mínimo da janela.
+fn caber(largura: Option<i32>, altura: Option<i32>) -> (u32, u32) {
+    let w = largura.map_or(1100, |l| 1100.min(l - 24)).max(560);
+    let h = altura.map_or(760, |a| 760.min(a - 110)).max(380);
+    (w as u32, h as u32)
+}
+
 fn main() -> std::process::ExitCode {
     if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
         if a == "--icones" {
@@ -2652,7 +2703,7 @@ fn main() -> std::process::ExitCode {
     // A janela principal sem a barra de título do Glove: os botões ficam na barra da
     // Jangada (como no Safari), e sobra mais espaço para a página.
     glove_ui::use_own_frame_main();
-    let opts = WindowOptions { title: "Jangada".into(), app_id: "glove.Navegador".into(), size: (1100, 760), fixed: false, min_size: Some((560, 380)) };
+    let opts = WindowOptions { title: "Jangada".into(), app_id: "glove.Navegador".into(), size: tamanho_inicial(), fixed: false, min_size: Some((560, 380)) };
     let r = run(opts, nav);
     if !privada {
         let _ = std::fs::remove_file(&sock);

@@ -34,6 +34,21 @@ vídeo* em Preferências ▸ Avançado, ou abra com `JANGADA_SEM_GPU=1 jangada`.
   do OpenH264; o conjunto completo, do `gstreamer1-plugin-libav` do RPM Fusion). Com os plugins do
   VA-API (`gstreamer1.0-plugins-bad`), a placa de vídeo decodifica.
 - **Tela cheia** dos vídeos: as barras da Jangada somem; Esc volta.
+- **PDF:** abre na própria aba, no visualizador do motor.
+
+### O que ainda não funciona
+
+- **Chamadas de vídeo e de voz** (Google Meet, Jitsi, as chamadas do WhatsApp Web) precisam do
+  WebRTC, e isso depende de como a distribuição compila o WebKitGTK. No Debian 13, e portanto no
+  Glove OS, ele vem sem WebRTC: as chamadas não funcionam.
+- **Vídeo protegido** (Netflix, Prime Video, o Spotify no navegador): não toca no Debian 13 nem no
+  Glove OS, em que o motor vem sem o módulo de proteção (DRM).
+- **Telas em 125% ou 150%:** o motor só desenha em escalas inteiras: a página é desenhada em 200% e
+  reduzida. Fica um pouco menos nítida que as barras da Jangada (desenhadas na escala exata) e
+  gasta mais placa de vídeo do que em 100% ou 200%.
+- **`prompt()`** das páginas (a caixa que pede um texto) é respondido como cancelado.
+- **Ler a área de transferência por script** (o botão "colar" de alguns sites) e **prender o
+  mouse** (jogos) são negados; Ctrl+V funciona normalmente.
 
 ## Desenvolvimento web
 
@@ -61,28 +76,61 @@ pergunta volta.
 
 ## Extensões
 
-A Jangada aceita extensões no formato do Chrome (Manifest V3, o subconjunto que cabe aqui): uma
-pasta com um `manifest.json`, um `.zip` dela ou um link do GitHub. A instalação mostra as
-permissões antes de gravar; nada entra sem a sua confirmação.
+A Jangada tem um formato **próprio** de extensões, pequeno: uma pasta com um `manifest.json` e
+arquivos JavaScript e CSS que entram nas páginas que você escolher, e um lugar para o script
+guardar dados. Serve para ajustar sites: esconder um pedaço, mudar um estilo, acrescentar um
+botão ou um aviso.
 
-```sh
-jangada --instalar ./minha-extensao          # pasta ou .zip
-jangada --instalar https://github.com/usuario/repositorio   # ou .../tree/RAMO/PASTA
-jangada --extensoes                          # lista as instaladas (ativa ou não)
-jangada --remover ID                         # tira uma
+**Não são as extensões do Chrome.** As da loja do Chrome (e as do Firefox e do Safari) não
+instalam nem funcionam aqui. O `manifest.json` usa os nomes de campo do Chrome, para quem já os
+conhece, e a semelhança acaba aí: não há script de fundo, botão na barra, página de opções nem
+as APIs `chrome.tabs`, `chrome.webRequest` e afins.
+
+O menor exemplo são dois arquivos numa pasta. O `manifest.json`:
+
+```json
+{
+  "manifest_version": 3,
+  "name": "Olá, Jangada",
+  "version": "1.0",
+  "content_scripts": [
+    { "matches": ["https://example.com/*"], "js": ["ola.js"] }
+  ]
+}
 ```
 
-Também dá para instalar e ligar ou desligar pelo Preferências ▸ **Instaladas**.
+E o `ola.js`, JavaScript comum com acesso à página:
 
-- **Suporte:** `content_scripts` (com `matches`, `js`, `css` e `run_at`), `chrome.storage.local`
-  (guardado por extensão, no seu perfil) e os padrões de site do Chrome (`<all_urls>`, `*://`,
-  `*.dominio.com`, caminhos com `*`).
-- **Não há:** scripts de fundo (`background`), janela de ação, páginas de opções, APIs além do
-  `storage` e do acesso às páginas, nem `chrome.tabs` e afins.
-- **Mundo isolado:** como no Chrome, os scripts das extensões (e os da Jangada, como o das senhas)
-  rodam num mundo à parte: veem a página, mas a página não os vê nem fala com a Jangada por eles.
-  Ainda assim, só instale extensões de quem você confia: elas leem as páginas em que entram.
-- O exemplo completo está em `exemplos/destaque/` (aviso no topo de páginas e contagem de visitas).
+```js
+var aviso = document.createElement("div");
+aviso.textContent = "Olá da Jangada!";
+aviso.style.cssText =
+  "position:fixed; right:12px; bottom:12px; padding:8px 12px; background:#1d6fe0; color:#fff;";
+document.body.append(aviso);
+```
+
+```sh
+jangada --instalar ./ola                 # pasta ou .zip; mostra o que ela pede e pergunta
+jangada --instalar https://github.com/usuario/repositorio   # ou .../tree/RAMO/PASTA
+jangada --extensoes                      # lista as instaladas (ativa ou não)
+jangada --remover ID                     # tira uma
+```
+
+Também dá para instalar, ligar, desligar e remover em Preferências ▸ **Instaladas**. Nada entra
+sem a sua confirmação.
+
+- **O que há:** scripts e CSS por página (`content_scripts`, com `matches`, `js` e `css`), os
+  padrões de endereço (`<all_urls>`, `*://`, `*.dominio.com`, caminhos com `*`) e os dados
+  guardados por extensão (`jangada.storage.local`: `get`, `set`, `remove` e `clear`). O objeto
+  `jangada` também atende por `chrome`, para quem traz um script escrito para o Chrome.
+- **Quando roda:** depois que a página termina de carregar, na página da aba (não nos quadros
+  internos). O `run_at` do manifesto é ignorado.
+- **Mundo isolado:** os scripts das extensões (e os da Jangada, como o das senhas) rodam num mundo
+  à parte: veem a página, mas a página não os vê nem fala com a Jangada por eles. Ainda assim, só
+  instale extensões de quem você confia: elas leem as páginas em que entram.
+- **O guia de quem escreve uma extensão** (o manifesto campo a campo, a API, como achar erros)
+  está em [`docs/EXTENSOES.md`](docs/EXTENSOES.md). Os exemplos: `exemplos/ola/` (o de cima) e
+  `exemplos/destaque/` (com CSS e contagem de visitas).
 
 ## Janela privada
 
@@ -110,8 +158,9 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
   abertas nos sites (os cookies: continua com as contas abertas) e as senhas, decifrados com a chave
   que o próprio navegador guarda no chaveiro. A sincronização com a conta do Google só existe no
   Chrome; o que vem é o que ele guarda no computador.
-- **Extensões** (menu Extensões): as da Jangada (escudos, cookies de terceiros, modo escuro nas
-  páginas) e as instaladas (veja acima). As da loja do Chrome não funcionam (o motor é outro).
+- **Extensões** (menu Extensões): as que vêm com a Jangada (escudos, cookies de terceiros, modo
+  escuro nas páginas) e as instaladas (veja acima). As da loja do Chrome não funcionam: a
+  Jangada não tem a plataforma de extensões do Chrome.
 
 ## Como usar
 
@@ -135,8 +184,9 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
 - **Botão direito:** o menu do Glove, solto, por cima de tudo (abrir o link em nova aba, copiar,
   colar, buscar o texto escolhido). Fora do Glove, um menu do GTK com os mesmos itens.
 - **Touchpad:** dois dedos para os lados voltam e avançam.
-- **Downloads** direto na pasta Downloads, com a janela Downloads (Ctrl+J, ou a seta na barra):
-  o andamento, abrir, mostrar na pasta e cancelar; **avisos das páginas** (alert e confirm) como alertas do
+- **Downloads** direto na pasta Downloads (o que o motor não sabe mostrar, como um `.zip` ou um
+  `.deb`, é baixado), com a janela Downloads (Ctrl+J, ou a seta na barra): o andamento, abrir,
+  mostrar na pasta e cancelar; **avisos das páginas** (alert e confirm) como alertas do
   Glove, em janela própria; a mãozinha nos links e a barra de texto nos campos.
 - **Favoritos:** a estrela no campo de endereço (ou Ctrl+D) guarda a página; a barra de favoritos
   (Ctrl+Shift+B) e o menu Favoritos levam a elas, e a página inicial mostra os favoritos.

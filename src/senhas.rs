@@ -79,19 +79,24 @@ pub fn script_preencher(origem: &str) -> Option<String> {
     Some(format!("window.__jangadaPreencher&&window.__jangadaPreencher({},{});", js_str(&l.usuario), js_str(&s)))
 }
 
-/// Um envio com senha: entra na fila da pergunta, se for novo (outra senha, outro
-/// usuário) e se o site não está em "Nunca".
-pub fn enviado(origem: &str, usuario: &str, senha: &str) {
+/// Um envio com senha é novo (outra senha, outro usuário) e o site não está em "Nunca"?
+/// Consulta o chaveiro: roda fora da linha principal (veja `motor::mensagem`).
+pub fn e_nova(origem: &str, usuario: &str, senha: &str) -> bool {
     if crate::ajustes::privada() || crate::ajustes::nunca_guardar().contains(origem) {
-        return;
+        return false;
     }
     if let Ok(c) = crate::chaveiro::Chaveiro::abrir() {
         if let Some(l) = c.logins().ok().and_then(|v| v.into_iter().find(|l| l.origem == origem && l.usuario == usuario)) {
             if c.segredo(&l.caminho).ok().is_some_and(|s| s == senha.as_bytes()) {
-                return;
+                return false;
             }
         }
     }
+    true
+}
+
+/// O envio entra na fila da pergunta "Guardar a senha?" (na linha principal).
+pub fn oferecer(origem: &str, usuario: &str, senha: &str) {
     PARA_GUARDAR.with(|p| {
         let mut p = p.borrow_mut();
         p.retain(|(o, u, _)| !(o == origem && u == usuario));
