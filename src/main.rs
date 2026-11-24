@@ -320,6 +320,8 @@ struct Navegador {
     /// escolhida com as setas, e a área onde a lista está desenhada (o mouse não passa para
     /// a página por baixo dela).
     sugestoes: Vec<(String, String)>,
+    /// The typed text the suggestions were made for (they are made again when it changes).
+    sugestoes_de: Option<String>,
     sugestao_sel: Option<usize>,
     sugestao_area: Option<Rect>,
     /// O histórico inteiro (para as sugestões; a lista do menu é só dos últimos).
@@ -952,6 +954,7 @@ impl Navegador {
                 self.carregar(&u);
                 self.barra_foco = false;
                 self.sugestoes.clear();
+                self.sugestoes_de = None;
                 self.sugestao_sel = None;
             }
         }
@@ -985,10 +988,15 @@ impl Navegador {
             if enter {
                 // a lista e a escolha ficam como estavam
             } else if self.barra_foco && !digitado.is_empty() && self.barra_mexida {
-                let antes = self.sugestoes.clone();
-                self.sugestoes = sugestoes_para(&digitado, &self.favoritos, &self.recentes_todos);
-                if self.sugestoes != antes {
-                    self.sugestao_sel = None;
+                // Only when the text changed: going through the whole history on every
+                // frame made typing here drag.
+                if self.sugestoes_de.as_deref() != Some(digitado.as_str()) {
+                    let new = sugestoes_para(&digitado, &self.favoritos, &self.recentes_todos);
+                    if new != self.sugestoes {
+                        self.sugestao_sel = None;
+                    }
+                    self.sugestoes = new;
+                    self.sugestoes_de = Some(digitado.clone());
                 }
                 // As setas escolhem uma sugestão (o campo de uma linha não as usa).
                 let baixo = ui.keys().iter().filter(|k| k.key == glove_ui::ui::Key::Down).count();
@@ -1007,6 +1015,7 @@ impl Navegador {
                 }
             } else {
                 self.sugestoes.clear();
+                self.sugestoes_de = None;
                 self.sugestao_sel = None;
             }
             if enter {
@@ -1017,6 +1026,7 @@ impl Navegador {
                 self.carregar(&t);
                 self.barra_foco = false;
                 self.sugestoes.clear();
+                self.sugestoes_de = None;
                 self.sugestao_sel = None;
             }
         } else {
@@ -2188,14 +2198,19 @@ fn sugestoes_para(digitado: &str, favoritos: &[(String, String)], historico: &[(
     }
     // Primeiro o que começa uma palavra do título ou o endereço (como o Safari), depois o
     // resto que contém o texto.
-    let comeca_palavra = |t: &str, u: &str| {
-        let (t, u) = (t.to_lowercase(), u.to_lowercase());
-        let u = u.split_once("://").map_or(u.as_str(), |(_, r)| r).trim_start_matches("www.").to_string();
-        u.starts_with(&busca) || t.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&busca))
-    };
-    let todos: Vec<&(String, String)> = favoritos.iter().chain(historico.iter()).collect();
-    let mut ordem: Vec<&(String, String)> = todos.iter().copied().filter(|(t, u)| comeca_palavra(t, u)).collect();
-    ordem.extend(todos.iter().copied().filter(|(t, u)| !comeca_palavra(t, u) && (t.to_lowercase().contains(&busca) || u.to_lowercase().contains(&busca))));
+    // Each entry is lowercased once and goes to one of the two lists.
+    let mut ordem: Vec<&(String, String)> = Vec::new();
+    let mut resto: Vec<&(String, String)> = Vec::new();
+    for item in favoritos.iter().chain(historico.iter()) {
+        let (t, u) = (item.0.to_lowercase(), item.1.to_lowercase());
+        let sem_esquema = u.split_once("://").map_or(u.as_str(), |(_, r)| r).trim_start_matches("www.");
+        if sem_esquema.starts_with(&busca) || t.split(|c: char| !c.is_alphanumeric()).any(|w| w.starts_with(&busca)) {
+            ordem.push(item);
+        } else if t.contains(&busca) || u.contains(&busca) {
+            resto.push(item);
+        }
+    }
+    ordem.extend(resto);
     for (t, u) in ordem {
         if v.len() >= 8 {
             break;
@@ -2913,6 +2928,7 @@ fn main() -> std::process::ExitCode {
         aj,
         favoritos,
         sugestoes: Vec::new(),
+        sugestoes_de: None,
         sugestao_sel: None,
         sugestao_area: None,
         recentes_todos: Vec::new(),

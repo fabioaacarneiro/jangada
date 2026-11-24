@@ -921,7 +921,7 @@ dependencies = [
 
 [[package]]
 name = "glove-config"
-version = "0.2.70"
+version = "0.2.71"
 dependencies = [
  "glove-i18n",
  "libc",
@@ -931,11 +931,11 @@ dependencies = [
 
 [[package]]
 name = "glove-i18n"
-version = "0.2.70"
+version = "0.2.71"
 
 [[package]]
 name = "glove-paint"
-version = "0.2.70"
+version = "0.2.71"
 dependencies = [
  "ab_glyph",
  "glove-i18n",
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "glove-ui"
-version = "0.2.70"
+version = "0.2.71"
 dependencies = [
  "glib-unix",
  "glove-config",
@@ -1285,7 +1285,7 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "jangada"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "adblock",
  "aes",
