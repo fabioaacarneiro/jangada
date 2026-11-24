@@ -52,7 +52,7 @@ Icon=jangada
 Terminal=false
 Categories=Network;WebBrowser;
 MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
-StartupWMClass=glove.Navegador
+StartupWMClass=glove.Browser
 Keywords=web;internet;navegador;browser;
 DESK
 cp README.md "$tmp/usr/share/doc/jangada/"

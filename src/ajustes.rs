@@ -70,36 +70,136 @@ pub fn pasta() -> PathBuf {
 }
 
 fn sim(v: &str) -> bool {
-    v == "sim" || v == "1" || v == "true"
+    v == "yes" || v == "1" || v == "true"
+}
+
+/// The settings keys that had Portuguese names up to Jangada 2.0: (then, now).
+const OLD_KEYS: [(&str, &str); 17] = [
+    ("inicio", "home"),
+    ("reabrir_abas", "reopen_tabs"),
+    ("busca", "search_engine"),
+    ("barra_favoritos", "bookmarks_bar"),
+    ("bloqueador", "shields"),
+    ("nao_rastrear", "do_not_track"),
+    ("escuro_nas_paginas", "dark_pages"),
+    ("bloquear_janelas", "block_popups"),
+    ("cookies_terceiros", "block_third_party_cookies"),
+    ("senhas", "passwords"),
+    ("usar_placa_de_video", "use_gpu"),
+    ("endereco_completo", "full_address"),
+    ("zoom", "zoom"),
+    ("inicio_fundo", "home_background"),
+    ("inicio_atalhos", "home_shortcuts"),
+    ("inicio_busca", "home_search"),
+    ("ferramentas_dev", "dev_tools"),
+];
+
+/// The old settings file in today's keys and values ("sim"/"nao" are "yes"/"no"; the home
+/// background is "color:…" or "image:…"). Lines it does not know are dropped.
+fn convert_old_settings(text: &str) -> String {
+    text.lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once('=')?;
+            let key = OLD_KEYS.iter().find(|(old, _)| *old == key.trim()).map(|(_, new)| *new)?;
+            let value = match value.trim() {
+                "sim" => "yes".to_string(),
+                "nao" => "no".to_string(),
+                v if key == "home_background" => match v.split_once(':') {
+                    Some(("cor", rest)) => format!("color:{rest}"),
+                    Some(("imagem", rest)) => format!("image:{rest}"),
+                    _ => v.to_string(),
+                },
+                v => v.to_string(),
+            };
+            Some(format!("{key} = {value}\n"))
+        })
+        .collect()
+}
+
+/// The stored site permissions with today's names for each kind.
+fn convert_old_permissions(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let mut fields: Vec<&str> = line.split('\t').collect();
+            if let Some(kind) = fields.get_mut(1) {
+                *kind = match *kind {
+                    "microfone" => "microphone",
+                    "localizacao" => "location",
+                    "notificacoes" => "notifications",
+                    "transferencia" => "clipboard",
+                    other => other,
+                };
+            }
+            fields.join("\t") + "\n"
+        })
+        .collect()
+}
+
+/// Up to Jangada 2.0 the data files, the settings keys and some stored values had Portuguese
+/// names. What this computer still has under those names moves to the names of today: each
+/// file once, and only when the new one does not exist yet.
+pub fn migrate_old_names() {
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let rename = |from: PathBuf, to: PathBuf| {
+        if from.exists() && !to.exists() {
+            let _ = std::fs::rename(from, to);
+        }
+    };
+    let convert = |from: PathBuf, to: PathBuf, f: fn(&str) -> String| {
+        if from.is_file() && !to.exists() {
+            if let Ok(text) = std::fs::read_to_string(&from) {
+                if std::fs::write(&to, f(&text)).is_ok() {
+                    let _ = std::fs::remove_file(&from);
+                }
+            }
+        }
+    };
+    // Settings, bookmarks, history, last session, permissions.
+    let config = pasta();
+    convert(config.join("ajustes.conf"), config.join("settings.conf"), convert_old_settings);
+    convert(config.join("permissoes.tsv"), config.join("permissions.tsv"), convert_old_permissions);
+    for (old, new) in [("favoritos.tsv", "bookmarks.tsv"), ("historico.tsv", "history.tsv"), ("sessao.tsv", "session.tsv"), ("senhas-nunca.txt", "passwords-never.txt"), ("escudos-fora.txt", "shields-off.txt")] {
+        rename(config.join(old), config.join(new));
+    }
+    // Installed extensions (and the list of the ones turned off); the home page is rebuilt.
+    let data = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("jangada");
+    rename(data.join("extensoes"), data.join("extensions"));
+    rename(data.join("extensions/ativas.txt"), data.join("extensions/disabled.txt"));
+    let _ = std::fs::remove_file(data.join("inicio.html"));
+    // The shields: the downloaded lists and the compiled filters.
+    let cache = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".cache")).join("jangada");
+    rename(cache.join("escudos"), cache.join("shields"));
+    rename(cache.join("shields/filtros.txt"), cache.join("shields/filters.txt"));
+    rename(cache.join("shields/compilados"), cache.join("shields/compiled"));
 }
 
 impl Ajustes {
     pub fn carregar() -> Self {
         let mut a = Self::default();
-        let Ok(t) = std::fs::read_to_string(pasta().join("ajustes.conf")) else { return a };
+        let Ok(t) = std::fs::read_to_string(pasta().join("settings.conf")) else { return a };
         for l in t.lines() {
             let Some((k, v)) = l.split_once('=') else { continue };
             let (k, v) = (k.trim(), v.trim());
             match k {
-                "inicio" => a.inicio = v.to_string(),
-                "reabrir_abas" => a.reabrir_abas = sim(v),
-                "busca" => a.busca = v.parse::<usize>().unwrap_or(0).min(BUSCADORES.len() - 1),
-                "barra_favoritos" => a.barra_favoritos = sim(v),
-                "bloqueador" => a.bloqueador = sim(v),
-                "nao_rastrear" => a.nao_rastrear = sim(v),
-                "escuro_nas_paginas" => a.escuro_nas_paginas = sim(v),
-                "bloquear_janelas" => a.bloquear_janelas = sim(v),
-                "cookies_terceiros" => a.cookies_terceiros = sim(v),
-                "senhas" => a.senhas = sim(v),
+                "home" => a.inicio = v.to_string(),
+                "reopen_tabs" => a.reabrir_abas = sim(v),
+                "search_engine" => a.busca = v.parse::<usize>().unwrap_or(0).min(BUSCADORES.len() - 1),
+                "bookmarks_bar" => a.barra_favoritos = sim(v),
+                "shields" => a.bloqueador = sim(v),
+                "do_not_track" => a.nao_rastrear = sim(v),
+                "dark_pages" => a.escuro_nas_paginas = sim(v),
+                "block_popups" => a.bloquear_janelas = sim(v),
+                "block_third_party_cookies" => a.cookies_terceiros = sim(v),
+                "passwords" => a.senhas = sim(v),
                 // Chave nova: até a 1.12 o padrão era desligada e ficou gravado "nao" para
                 // quem salvou as preferências; assim todos passam ao padrão novo (ligada).
-                "usar_placa_de_video" => a.placa_de_video = sim(v),
-                "endereco_completo" => a.endereco_completo = sim(v),
+                "use_gpu" => a.placa_de_video = sim(v),
+                "full_address" => a.endereco_completo = sim(v),
                 "zoom" => a.zoom = v.parse().unwrap_or(0.0),
-                "inicio_fundo" => a.inicio_fundo = v.to_string(),
-                "inicio_atalhos" => a.inicio_atalhos = sim(v),
-                "inicio_busca" => a.inicio_busca = sim(v),
-                "ferramentas_dev" => a.ferramentas_dev = sim(v),
+                "home_background" => a.inicio_fundo = v.to_string(),
+                "home_shortcuts" => a.inicio_atalhos = sim(v),
+                "home_search" => a.inicio_busca = sim(v),
+                "dev_tools" => a.ferramentas_dev = sim(v),
                 _ => {}
             }
         }
@@ -107,12 +207,12 @@ impl Ajustes {
     }
 
     pub fn salvar(&self) {
-        let b = |v: bool| if v { "sim" } else { "nao" };
+        let b = |v: bool| if v { "yes" } else { "no" };
         let t = format!(
-            "# Preferências da Jangada (Jangada ▸ Preferências…)\ninicio = {}\nreabrir_abas = {}\nbusca = {}\nbarra_favoritos = {}\nbloqueador = {}\nnao_rastrear = {}\nescuro_nas_paginas = {}\nbloquear_janelas = {}\ncookies_terceiros = {}\nsenhas = {}\nusar_placa_de_video = {}\nendereco_completo = {}\nzoom = {}\ninicio_fundo = {}\ninicio_atalhos = {}\ninicio_busca = {}\nferramentas_dev = {}\n",
+            "# Jangada settings (Jangada ▸ Preferences…)\nhome = {}\nreopen_tabs = {}\nsearch_engine = {}\nbookmarks_bar = {}\nshields = {}\ndo_not_track = {}\ndark_pages = {}\nblock_popups = {}\nblock_third_party_cookies = {}\npasswords = {}\nuse_gpu = {}\nfull_address = {}\nzoom = {}\nhome_background = {}\nhome_shortcuts = {}\nhome_search = {}\ndev_tools = {}\n",
             self.inicio, b(self.reabrir_abas), self.busca, b(self.barra_favoritos), b(self.bloqueador), b(self.nao_rastrear), b(self.escuro_nas_paginas), b(self.bloquear_janelas), b(self.cookies_terceiros), b(self.senhas), b(self.placa_de_video), b(self.endereco_completo), self.zoom, self.inicio_fundo, b(self.inicio_atalhos), b(self.inicio_busca), b(self.ferramentas_dev)
         );
-        let _ = std::fs::write(pasta().join("ajustes.conf"), t);
+        let _ = std::fs::write(pasta().join("settings.conf"), t);
         self.aplicar();
     }
 
@@ -165,11 +265,11 @@ fn gravar_lista(nome: &str, v: &[(String, String)]) {
 }
 
 pub fn favoritos() -> Vec<(String, String)> {
-    ler_lista("favoritos.tsv")
+    ler_lista("bookmarks.tsv")
 }
 
 pub fn gravar_favoritos(v: &[(String, String)]) {
-    gravar_lista("favoritos.tsv", v);
+    gravar_lista("bookmarks.tsv", v);
 }
 
 thread_local! {
@@ -184,7 +284,7 @@ const ESPERA_DAS_VISITAS: std::time::Duration = std::time::Duration::from_secs(2
 /// O histórico, do mais novo para o mais velho.
 pub fn historico() -> Vec<(String, String)> {
     gravar_visitas();
-    ler_lista("historico.tsv")
+    ler_lista("history.tsv")
 }
 
 /// Uma visita: vai para o topo (sem repetir o endereço), no máximo 2000. A gravação
@@ -228,12 +328,12 @@ pub fn gravar_visitas() {
     if novas.is_empty() {
         return;
     }
-    gravar_lista("historico.tsv", &juntar_visitas(ler_lista("historico.tsv"), novas));
+    gravar_lista("history.tsv", &juntar_visitas(ler_lista("history.tsv"), novas));
 }
 
 /// As permissões guardadas dos sites (um por linha: origem, tipo, permitido 1/0).
 fn permissoes_guardadas() -> Vec<(String, String, bool)> {
-    std::fs::read_to_string(pasta().join("permissoes.tsv"))
+    std::fs::read_to_string(pasta().join("permissions.tsv"))
         .unwrap_or_default()
         .lines()
         .filter_map(|l| {
@@ -257,7 +357,7 @@ pub fn gravar_permissao(origem: &str, tipo: &str, permitido: bool) {
     let mut v: Vec<(String, String, bool)> = permissoes_guardadas().into_iter().filter(|(o, t, _)| !(o == origem && t == tipo)).collect();
     v.push((origem.to_string(), tipo.to_string(), permitido));
     let t: String = v.iter().map(|(o, t, p)| format!("{o}\t{t}\t{}\n", if *p { 1 } else { 0 })).collect();
-    let _ = std::fs::write(pasta().join("permissoes.tsv"), t);
+    let _ = std::fs::write(pasta().join("permissions.tsv"), t);
 }
 
 /// Quantos sites têm alguma permissão guardada.
@@ -267,14 +367,14 @@ pub fn quantas_permissoes() -> usize {
 
 /// Esquece todas as permissões dos sites.
 pub fn esquecer_permissoes() {
-    let _ = std::fs::remove_file(pasta().join("permissoes.tsv"));
+    let _ = std::fs::remove_file(pasta().join("permissions.tsv"));
 }
 
 /// Tira um site do histórico.
 pub fn apagar_do_historico(url: &str) {
     let mut v = historico();
     v.retain(|(_, u)| u != url);
-    gravar_lista("historico.tsv", &v);
+    gravar_lista("history.tsv", &v);
 }
 
 /// Junta visitas importadas ao fim do histórico (sem repetir endereço). Devolve quantas
@@ -291,22 +391,22 @@ pub fn juntar_historico(novas: &[(String, String)]) -> usize {
             n += 1;
         }
     }
-    gravar_lista("historico.tsv", &v);
+    gravar_lista("history.tsv", &v);
     n
 }
 
 pub fn limpar_historico() {
     VISITAS.with(|v| v.borrow_mut().clear());
-    let _ = std::fs::remove_file(pasta().join("historico.tsv"));
+    let _ = std::fs::remove_file(pasta().join("history.tsv"));
 }
 
 /// As abas da última vez: (título, endereço).
 pub fn sessao() -> Vec<(String, String)> {
-    ler_lista("sessao.tsv")
+    ler_lista("session.tsv")
 }
 
 pub fn gravar_sessao(abas: &[(String, String)]) {
-    gravar_lista("sessao.tsv", abas);
+    gravar_lista("session.tsv", abas);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +434,7 @@ pub const BLOQUEADOS: &[&str] = &[
 
 /// Os sites em que a Jangada não oferece guardar a senha ("Nunca Neste Site").
 pub fn nunca_guardar() -> std::collections::HashSet<String> {
-    std::fs::read_to_string(pasta().join("senhas-nunca.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    std::fs::read_to_string(pasta().join("passwords-never.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
 }
 
 pub fn nunca_guardar_em(origem: &str) {
@@ -342,19 +442,19 @@ pub fn nunca_guardar_em(origem: &str) {
     v.insert(origem.to_string());
     let mut l: Vec<String> = v.into_iter().collect();
     l.sort();
-    let _ = std::fs::write(pasta().join("senhas-nunca.txt"), l.join("\n") + "\n");
+    let _ = std::fs::write(pasta().join("passwords-never.txt"), l.join("\n") + "\n");
 }
 
 /// Os sites com os escudos desligados (um por linha).
 pub fn escudos_fora() -> std::collections::HashSet<String> {
-    std::fs::read_to_string(pasta().join("escudos-fora.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
+    std::fs::read_to_string(pasta().join("shields-off.txt")).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
 }
 
 pub fn gravar_escudos_fora(v: &std::collections::HashSet<String>) {
     let mut l: Vec<&String> = v.iter().collect();
     l.sort();
     let t: String = l.iter().map(|s| format!("{s}\n")).collect();
-    let _ = std::fs::write(pasta().join("escudos-fora.txt"), t);
+    let _ = std::fs::write(pasta().join("shields-off.txt"), t);
 }
 
 #[cfg(test)]
@@ -370,6 +470,10 @@ mod tests {
         anotar_visita("Outra", "https://outra.exemplo/");
         let fila = VISITAS.with(|v| std::mem::take(&mut *v.borrow_mut()));
         assert_eq!(fila.len(), 2);
+        // The settings and the permissions of before, in today's names.
+        assert_eq!(convert_old_settings("# Preferências\nreabrir_abas = sim\nbusca = 2\ninicio_fundo = cor:#eceef3\nsenhas = nao\noutra = 1\n"), "reopen_tabs = yes\nsearch_engine = 2\nhome_background = color:#eceef3\npasswords = no\n");
+        assert_eq!(convert_old_settings("inicio_fundo = imagem:/home/x/foto.jpg\n"), "home_background = image:/home/x/foto.jpg\n");
+        assert_eq!(convert_old_permissions("https://a.b\tmicrofone\t1\nhttps://a.b\tcamera\t0\n"), "https://a.b\tmicrophone\t1\nhttps://a.b\tcamera\t0\n");
         let velho = vec![("Antiga".to_string(), "https://antiga.exemplo/".to_string()), ("Chat".to_string(), "https://chat.exemplo/".to_string())];
         let h = juntar_visitas(velho, fila);
         assert_eq!(h.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["Outra", "Mensagem nova (50)", "Antiga"]);

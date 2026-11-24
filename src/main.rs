@@ -1812,8 +1812,8 @@ impl Navegador {
                 ui.space(12.0);
                 ui.label_ex(tr!("Página inicial: fundo"), 12.0, true, tinta());
                 // Cor pronta, ou a imagem pelo caminho dela (a página embute a imagem).
-                let cores = [("", tr!("Padrão")), ("cor:#eceef3", tr!("Cinza claro")), ("cor:#dbe7f7", tr!("Azul claro")), ("cor:#2b2b31", tr!("Grafite"))];
-                let imagem = self.aj.inicio_fundo.starts_with("imagem:");
+                let cores = [("", tr!("Padrão")), ("color:#eceef3", tr!("Cinza claro")), ("color:#dbe7f7", tr!("Azul claro")), ("color:#2b2b31", tr!("Grafite"))];
+                let imagem = self.aj.inicio_fundo.starts_with("image:");
                 let mut k = cores.iter().position(|c| c.0 == self.aj.inicio_fundo).unwrap_or(if imagem { 4 } else { 0 });
                 let mut nomes_fundo: Vec<String> = cores.iter().map(|c| c.1.to_string()).collect();
                 nomes_fundo.push(tr!("Imagem…").into());
@@ -1821,13 +1821,13 @@ impl Navegador {
                     if k < cores.len() {
                         self.aj.inicio_fundo = cores[k].0.to_string();
                     } else if !imagem {
-                        self.aj.inicio_fundo = format!("imagem:{}", self.fundo_imagem);
+                        self.aj.inicio_fundo = format!("image:{}", self.fundo_imagem);
                     }
                 }
                 if k == 4 {
                     ui.space(4.0);
                     if ui.text_field(&mut self.fundo_imagem, 360.0) {
-                        self.aj.inicio_fundo = format!("imagem:{}", self.fundo_imagem.trim());
+                        self.aj.inicio_fundo = format!("image:{}", self.fundo_imagem.trim());
                     }
                     ui.small(&tr!("Caminho de uma imagem no computador (JPG, PNG ou WebP, até 8 MB)."));
                 }
@@ -2441,22 +2441,22 @@ impl App for Navegador {
         // As Preferências numa janela própria.
         if std::mem::take(&mut self.prefs) {
             self.secao = if self.pergunta != 0 { Secao::Privacidade } else { self.secao };
-            ui.open_window(JANELA_PREFS, WindowOptions { title: tr!("Preferências da Jangada").into(), app_id: "glove.Navegador".into(), size: (600, 420), fixed: true, min_size: None });
+            ui.open_window(JANELA_PREFS, WindowOptions { title: tr!("Preferências da Jangada").into(), app_id: "glove.Browser".into(), size: (600, 420), fixed: true, min_size: None });
         }
         if std::mem::take(&mut self.hist_abrir) {
             self.hist_lista = ajustes::historico();
             self.hist_busca.clear();
             self.hist_sel = None;
-            ui.open_window(JANELA_HIST, WindowOptions { title: tr!("Histórico").into(), app_id: "glove.Navegador".into(), size: (720, 480), fixed: false, min_size: Some((420, 260)) });
+            ui.open_window(JANELA_HIST, WindowOptions { title: tr!("Histórico").into(), app_id: "glove.Browser".into(), size: (720, 480), fixed: false, min_size: Some((420, 260)) });
         }
         if std::mem::take(&mut self.imp_abrir) {
             self.imp_fontes = importar::fontes();
             self.imp_escolha = 0;
             self.imp_msg = None;
-            ui.open_window(JANELA_IMPORTAR, WindowOptions { title: tr!("Importar de Outro Navegador").into(), app_id: "glove.Navegador".into(), size: (460, 330), fixed: true, min_size: None });
+            ui.open_window(JANELA_IMPORTAR, WindowOptions { title: tr!("Importar de Outro Navegador").into(), app_id: "glove.Browser".into(), size: (460, 330), fixed: true, min_size: None });
         }
         if std::mem::take(&mut self.down_abrir) {
-            ui.open_window(JANELA_DOWN, WindowOptions { title: tr!("Downloads").into(), app_id: "glove.Navegador".into(), size: (560, 340), fixed: false, min_size: Some((380, 200)) });
+            ui.open_window(JANELA_DOWN, WindowOptions { title: tr!("Downloads").into(), app_id: "glove.Browser".into(), size: (560, 340), fixed: false, min_size: Some((380, 200)) });
         }
         // O botão vermelho da barra.
         if std::mem::take(&mut self.fechar_janela) && self.close_requested() {
@@ -2525,7 +2525,7 @@ impl App for Navegador {
         // prompt(): a pergunta numa janela própria, com o campo do texto (uma de cada vez).
         if let (Some((motor::Dialogo::Pergunta(sugerido), msg, cb)), None, Some(a)) = (&dialog, &self.pergunta_js, self.aba()) {
             self.pergunta_js = Some(Pergunta { pagina: std::rc::Rc::downgrade(&a.p), dialogo: cb.clone(), site: site(&self.url_atual()), mensagem: msg.clone(), texto: sugerido.clone(), focar: true });
-            ui.open_window(JANELA_PERGUNTA, WindowOptions { title: tr!("Pergunta da página").into(), app_id: "glove.Navegador".into(), size: (440, 190), fixed: true, min_size: None });
+            ui.open_window(JANELA_PERGUNTA, WindowOptions { title: tr!("Pergunta da página").into(), app_id: "glove.Browser".into(), size: (440, 190), fixed: true, min_size: None });
         }
         // (alert e confirm vão pelo alerta do Glove, mais abaixo.)
         let dialog = dialog.filter(|d| !matches!(d.0, motor::Dialogo::Pergunta(_)));
@@ -2541,7 +2541,7 @@ impl App for Navegador {
             let texto = tr!("Você decide agora. \"Permitir\" e \"Negar\" valem para este site da próxima vez; \"Só desta vez\" não fica guardado.");
             // A área de transferência é perguntada numa faixa dentro da janela: quem só queria
             // colar responde ali mesmo, sem uma janela de alerta tirando o teclado da página.
-            let escolha = if nomes == ["transferencia"] {
+            let escolha = if nomes == ["clipboard"] {
                 let i = Self::faixa_de_pergunta(ui, area, &titulo);
                 self.focar_pagina |= i.is_some();
                 i
@@ -2653,7 +2653,7 @@ fn instalar_pela_linha(resto: &[String]) -> std::process::ExitCode {
         eprintln!("usage: jangada --install FOLDER | FILE.zip | https://github.com/USER/REPOSITORY [--yes]");
         return 2.into();
     };
-    let sim = resto.iter().any(|a| a == "--yes" || a == "--sim");
+    let sim = resto.iter().any(|a| a == "--yes");
     let prep = match extensoes::preparar(origem) {
         Ok(e) => e,
         Err(e) => {
@@ -2712,9 +2712,6 @@ fn gerar_icones(dir: &std::path::Path) -> std::process::ExitCode {
     0.into()
 }
 
-/// As opções da linha de comando são em inglês. Os nomes de antes, em português
-/// (`--instalar`, `--privada`…), continuam aceitos para não quebrar atalhos e scripts
-/// antigos, mas não aparecem mais na ajuda nem na documentação.
 const AJUDA: &str = "Usage: jangada [OPTIONS] [URL...]
 
 Opens the URLs in tabs (in the window that is already open, if there is one).
@@ -2731,15 +2728,10 @@ Options:
   --help                  print this help
 ";
 
-/// A opção é esta? (`ingles`, ou o nome de antes em português.)
-fn opcao(a: &str, ingles: &str, antiga: &str) -> bool {
-    a == ingles || a == antiga
-}
-
 /// A porta pedida com `--debug [PORTA]` (padrão 9222), ou None sem a opção.
 fn porta_depuracao() -> Option<u16> {
     let args: Vec<String> = std::env::args().collect();
-    let i = args.iter().position(|a| opcao(a, "--debug", "--depurar"))?;
+    let i = args.iter().position(|a| a == "--debug")?;
     Some(args.get(i + 1).and_then(|p| p.parse::<u16>().ok()).filter(|p| *p != 0).unwrap_or(9222))
 }
 
@@ -2753,7 +2745,7 @@ fn enderecos_da_linha() -> Vec<String> {
             pular = false;
             continue;
         }
-        if opcao(a, "--debug", "--depurar") {
+        if a == "--debug" {
             pular = args.get(i + 1).is_some_and(|p| p.parse::<u16>().is_ok());
             continue;
         }
@@ -2810,10 +2802,12 @@ fn caber(largura: Option<i32>, altura: Option<i32>) -> (u32, u32) {
 
 fn main() -> std::process::ExitCode {
     if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
-        if opcao(&a, "--icons", "--icones") {
+        if a == "--icons" {
             return gerar_icones(std::path::Path::new(&dir));
         }
     }
+    // What an older Jangada stored under Portuguese names moves to the names of today.
+    ajustes::migrate_old_names();
     // As extensões pela linha de comando (sem abrir o navegador).
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -2825,14 +2819,14 @@ fn main() -> std::process::ExitCode {
             println!("Jangada {VERSAO}");
             return 0.into();
         }
-        Some("--install" | "--instalar") => return instalar_pela_linha(&args[2..]),
-        Some("--extensions" | "--extensoes") => {
+        Some("--install") => return instalar_pela_linha(&args[2..]),
+        Some("--extensions") => {
             for e in extensoes::listar() {
                 println!("{}\t{} {}\t{}", e.id, e.nome, e.versao, if e.ativa { "ativa" } else { "desligada" });
             }
             return 0.into();
         }
-        Some("--remove" | "--remover") => {
+        Some("--remove") => {
             let id = args.get(2).cloned().unwrap_or_default();
             extensoes::remover(&id);
             println!("{id} removida.");
@@ -2862,7 +2856,7 @@ fn main() -> std::process::ExitCode {
     let urls: Vec<String> = enderecos_da_linha().into_iter().map(|a| endereco(&a, &inicio_url, aj.busca_url())).collect();
     // Já aberta: manda os endereços para ela e sai.
     // A janela privada é outra janela: não manda os endereços para a normal e não a substitui.
-    let privada = std::env::args().any(|a| opcao(&a, "--private", "--privada"));
+    let privada = std::env::args().any(|a| a == "--private");
     ajustes::PRIVADA.store(privada, std::sync::atomic::Ordering::Relaxed);
     let sock = socket_path();
     if !privada {
@@ -2884,7 +2878,7 @@ fn main() -> std::process::ExitCode {
         })
     };
     // O GTK antes do motor (as abas são widgets dele).
-    glib::set_prgname(Some("glove.Navegador"));
+    glib::set_prgname(Some("glove.Browser"));
     if glove_ui::gtk::init().is_err() {
         eprintln!("jangada: sem tela (o GTK não abriu)");
         return 1.into();
@@ -2894,7 +2888,7 @@ fn main() -> std::process::ExitCode {
     // Os escudos (os filtros já compilados abrem na hora).
     escudos::iniciar();
     // As abas da última vez: reabertas já (Preferências) ou guardadas para o menu Histórico.
-    let fundo_imagem = aj.inicio_fundo.strip_prefix("imagem:").unwrap_or("").to_string();
+    let fundo_imagem = aj.inicio_fundo.strip_prefix("image:").unwrap_or("").to_string();
     let sessao = ajustes::sessao();
     let aj_reabrir = aj.reabrir_abas && urls.is_empty();
     let mut nav = Navegador {
@@ -2989,7 +2983,7 @@ fn main() -> std::process::ExitCode {
     // A janela principal sem a barra de título do Glove: os botões ficam na barra da
     // Jangada (como no Safari), e sobra mais espaço para a página.
     glove_ui::use_own_frame_main();
-    let opts = WindowOptions { title: "Jangada".into(), app_id: "glove.Navegador".into(), size: tamanho_inicial(), fixed: false, min_size: Some((560, 380)) };
+    let opts = WindowOptions { title: "Jangada".into(), app_id: "glove.Browser".into(), size: tamanho_inicial(), fixed: false, min_size: Some((560, 380)) };
     let r = run(opts, nav);
     if !privada {
         let _ = std::fs::remove_file(&sock);

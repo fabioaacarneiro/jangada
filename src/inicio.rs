@@ -61,7 +61,7 @@ fn cores(escuro: bool) -> (&'static str, &'static str, &'static str, &'static st
 /// O que a pessoa escolheu para a página inicial (Preferências ▸ Página Inicial).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Opcoes {
-    /// "" (o padrão do tema), "cor:#rrggbb" ou "imagem:/caminho/da/imagem.jpg".
+    /// "" (o padrão do tema), "color:#rrggbb" ou "image:/caminho/da/imagem.jpg".
     pub fundo: String,
     /// Os atalhos dos sites.
     pub atalhos: bool,
@@ -78,11 +78,11 @@ impl Default for Opcoes {
 /// O fundo da página como CSS: a cor escolhida, a imagem (embutida, para a página ser um
 /// arquivo só) ou o padrão do tema (None).
 fn fundo_css(fundo: &str) -> Option<String> {
-    if let Some(c) = fundo.strip_prefix("cor:") {
+    if let Some(c) = fundo.strip_prefix("color:") {
         let ok = c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|h| h.is_ascii_hexdigit());
         return ok.then(|| format!("background:{c}"));
     }
-    let caminho = fundo.strip_prefix("imagem:")?;
+    let caminho = fundo.strip_prefix("image:")?;
     // Imagens grandes não cabem bem numa página: até 8 MB, e acima disso fica o padrão.
     let dados = std::fs::metadata(caminho).ok().filter(|m| m.len() <= 8 << 20).and_then(|_| std::fs::read(caminho).ok())?;
     let tipo = if caminho.to_lowercase().ends_with(".png") { "png" } else if caminho.to_lowercase().ends_with(".webp") { "webp" } else { "jpeg" };
@@ -155,7 +155,7 @@ pub fn pagina_inicial(dir: &Path, fonts: &Fonts, escuro: bool, busca: &str, favo
         logo = img(fonts, Some(icons::Icon::Jangada), 224),
         rodape = rodape(fonts),
     );
-    let p = dir.join("inicio.html");
+    let p = dir.join("home.html");
     let _ = std::fs::write(&p, html);
     p
 }
@@ -184,12 +184,12 @@ pub fn html_erro(fonts: &Fonts, escuro: bool, url: &str, codigo: &str) -> String
 mod tests {
     #[test]
     fn fundo_da_pagina_inicial() {
-        assert_eq!(super::fundo_css("cor:#eceef3").as_deref(), Some("background:#eceef3"));
+        assert_eq!(super::fundo_css("color:#eceef3").as_deref(), Some("background:#eceef3"));
         // Cor inválida (não é #rrggbb) não vira CSS.
-        assert!(super::fundo_css("cor:red").is_none());
-        assert!(super::fundo_css("cor:#zzzzzz").is_none());
+        assert!(super::fundo_css("color:red").is_none());
+        assert!(super::fundo_css("color:#zzzzzz").is_none());
         // Imagem inexistente cai no padrão do tema.
-        assert!(super::fundo_css("imagem:/nao/existe.jpg").is_none());
+        assert!(super::fundo_css("image:/nao/existe.jpg").is_none());
         assert!(super::fundo_css("").is_none());
     }
 

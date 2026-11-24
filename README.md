@@ -23,7 +23,7 @@ Feita para computadores modestos:
 - o pacote tem uns 4 MB: o motor, os codecs de vídeo (GStreamer) e o resto vêm da distribuição.
 
 Para desenhar só com o processador (placa de vídeo com problema): desmarque *Usar a placa de
-vídeo* em Preferências ▸ Avançado, ou abra com `JANGADA_SEM_GPU=1 jangada`.
+vídeo* em Preferências ▸ Avançado, ou abra com `JANGADA_NO_GPU=1 jangada`.
 
 ## Sites e vídeos
 
@@ -152,7 +152,7 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
 - **Escudos:** anúncios e rastreadores barrados pelo próprio motor antes de carregar, e os espaços
   de anúncio escondidos na página. As listas são as do Brave e do uBlock (EasyList, EasyPrivacy, a
   portuguesa, a do Peter Lowe e os filtros do uBlock Origin, renovadas toda semana em
-  `~/.cache/jangada/escudos`); o motor de bloqueio do Brave (o `adblock`) as converte para os
+  `~/.cache/jangada/shields`); o motor de bloqueio do Brave (o `adblock`) as converte para os
   filtros de conteúdo do WebKit, que ele compila e guarda. O clique no escudo da barra liga ou
   desliga os escudos no site. **Barrar cookies de terceiros** liga também a prevenção de
   rastreamento do motor (a do Safari: os rastreadores entre sites perdem os cookies).

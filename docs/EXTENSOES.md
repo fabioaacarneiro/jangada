@@ -149,7 +149,7 @@ jangada.storage.local.get({ visitas: 0 }).then(function (dados) {
 Todas devolvem uma promessa (e aceitam uma função de retorno como último argumento, como no
 Chrome). Os valores são os que cabem em JSON: texto, número, verdadeiro/falso, listas e objetos.
 Os dados são de cada extensão, valem em todos os sites em que ela entra e ficam em
-`~/.local/share/jangada/extensoes/IDENTIFICADOR/storage.json`. Instalar a extensão de novo os
+`~/.local/share/jangada/extensions/IDENTIFICADOR/storage.json`. Instalar a extensão de novo os
 mantém; remover a extensão os apaga.
 
 Não há mais nada na API: nada de `jangada.tabs`, mensagens entre scripts, pedidos de rede com

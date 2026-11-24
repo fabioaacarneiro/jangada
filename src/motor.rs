@@ -181,7 +181,7 @@ pub fn iniciar(privada: bool, dados: &Path, aj: &crate::ajustes::Ajustes) {
         ctx.set_spell_checking_languages(&["pt_BR", "en_US"]);
     }
     let ajustes = Settings::new();
-    let gpu = std::env::var_os("JANGADA_SEM_GPU").is_none() && aj.placa_de_video;
+    let gpu = std::env::var_os("JANGADA_NO_GPU").is_none() && aj.placa_de_video;
     ajustes.set_hardware_acceleration_policy(if gpu { HardwareAccelerationPolicy::Always } else { HardwareAccelerationPolicy::Never });
     ajustes.set_enable_developer_extras(aj.ferramentas_dev || std::env::var_os("WEBKIT_INSPECTOR_HTTP_SERVER").is_some());
     ajustes.set_enable_smooth_scrolling(true);
@@ -748,13 +748,13 @@ fn mensagem(view: &WebView, m: &str) {
 }
 
 /// As chaves das permissões (guardadas em permissoes.tsv): camera, microfone,
-/// localizacao, notificacoes, transferencia.
+/// location, notifications, clipboard.
 fn pedido_de_permissao(view: &WebView, req: &PermissionRequest) -> bool {
     let origem = crate::importar::origem(&view.uri().map(|u| u.to_string()).unwrap_or_default());
     let mut nomes: Vec<&'static str> = Vec::new();
     if let Some(m) = req.downcast_ref::<webkit6::UserMediaPermissionRequest>() {
         if webkit6::functions::user_media_permission_is_for_audio_device(m) {
-            nomes.push("microfone");
+            nomes.push("microphone");
         }
         if webkit6::functions::user_media_permission_is_for_video_device(m) {
             nomes.push("camera");
@@ -765,13 +765,13 @@ fn pedido_de_permissao(view: &WebView, req: &PermissionRequest) -> bool {
             return true;
         }
     } else if req.is::<webkit6::GeolocationPermissionRequest>() {
-        nomes.push("localizacao");
+        nomes.push("location");
     } else if req.is::<webkit6::NotificationPermissionRequest>() {
-        nomes.push("notificacoes");
+        nomes.push("notifications");
     } else if req.type_().name() == "WebKitClipboardPermissionRequest" {
         // Ler o que foi copiado (o botão "colar" de um site): a pessoa decide. (Pelo nome
         // do tipo: ele só existe no WebKitGTK 2.42 em diante, e a Jangada roda nos de antes.)
-        nomes.push("transferencia");
+        nomes.push("clipboard");
     } else if req.is::<webkit6::PointerLockPermissionRequest>() {
         // Prender o mouse (jogos, visualizadores 3D): pode, e o Esc solta. (O aviso sai
         // quando o mouse fica preso de verdade: veja `mensagem`.)
@@ -801,9 +801,9 @@ fn pedido_de_permissao(view: &WebView, req: &PermissionRequest) -> bool {
 pub fn rotulo_permissao(chave: &str) -> &'static str {
     match chave {
         "camera" => "a câmera",
-        "microfone" => "o microfone",
-        "localizacao" => "a localização",
-        "transferencia" => "a área de transferência",
+        "microphone" => "o microfone",
+        "location" => "a localização",
+        "clipboard" => "a área de transferência",
         _ => "as notificações",
     }
 }

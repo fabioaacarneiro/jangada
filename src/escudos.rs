@@ -41,7 +41,7 @@ fn fora() -> &'static RwLock<HashSet<String>> {
 
 fn pasta() -> PathBuf {
     let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-    let p = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".cache")).join("jangada/escudos");
+    let p = std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".cache")).join("jangada/shields");
     let _ = std::fs::create_dir_all(&p);
     p
 }
@@ -83,8 +83,8 @@ fn textos_das_listas() -> Vec<String> {
 /// listas estão velhas, uma linha à parte baixa as listas e converte, e o WebKit compila.
 pub fn iniciar() {
     let dir = pasta();
-    let store = webkit6::UserContentFilterStore::new(&dir.join("compilados").to_string_lossy());
-    let ids: Vec<String> = std::fs::read_to_string(dir.join("filtros.txt")).unwrap_or_default().lines().map(str::to_string).filter(|l| !l.is_empty()).collect();
+    let store = webkit6::UserContentFilterStore::new(&dir.join("compiled").to_string_lossy());
+    let ids: Vec<String> = std::fs::read_to_string(dir.join("filters.txt")).unwrap_or_default().lines().map(str::to_string).filter(|l| !l.is_empty()).collect();
     carregar(store.clone(), ids.clone(), Vec::new());
     let velhas = LISTAS.iter().any(|(f, _)| velho(&dir.join(f)));
     if !ids.is_empty() && !velhas {
@@ -141,7 +141,7 @@ fn carregar(store: webkit6::UserContentFilterStore, mut faltam: Vec<String>, mut
 fn compilar(store: webkit6::UserContentFilterStore, pedacos: Vec<String>) {
     fn proximo(store: webkit6::UserContentFilterStore, mut resto: Vec<(String, String)>, mut prontos: Vec<webkit6::UserContentFilter>, ids: Vec<String>) {
         if resto.is_empty() {
-            let _ = std::fs::write(pasta().join("filtros.txt"), ids.join("\n"));
+            let _ = std::fs::write(pasta().join("filters.txt"), ids.join("\n"));
             crate::motor::usar_filtros(prontos);
             return;
         }

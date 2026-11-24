@@ -53,7 +53,7 @@ fn pasta_extensoes() -> PathBuf {
     #[cfg(not(test))]
     let p = {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
-        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("jangada/extensoes")
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".local/share")).join("jangada/extensions")
     };
     let _ = std::fs::create_dir_all(&p);
     p
@@ -86,7 +86,7 @@ fn id_para(nome: &str, manifesto: &str) -> String {
 }
 
 fn ativas_arquivo() -> PathBuf {
-    pasta_extensoes().join("ativas.txt")
+    pasta_extensoes().join("disabled.txt")
 }
 
 fn desativadas() -> Vec<String> {
