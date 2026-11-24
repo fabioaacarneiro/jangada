@@ -19,6 +19,9 @@ sp install l >/dev/null
 sp install x >/dev/null
 # A série n inteira (o curl e o wget com todas as bibliotecas deles: ngtcp2, nghttp3…).
 sp install n >/dev/null
+# As séries a (base: zlib, xz, bzip2) e ap (sqlite e outras que o motor usa).
+sp install a >/dev/null
+sp install ap >/dev/null
 sp install kernel-headers dbus elogind eudev libgudev >/dev/null || true
 update-ca-certificates --fresh >/dev/null 2>&1 || true
 motor_raiz="$PWD/motor-slackware"
