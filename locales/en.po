@@ -690,3 +690,6 @@ msgstr "Installed: {}."
 
 msgid "{} em {}"
 msgstr "{} on {}"
+
+msgid "Privada"
+msgstr "Private"

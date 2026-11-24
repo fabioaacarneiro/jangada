@@ -34,7 +34,8 @@ cd "$trab"
 # O unifdef (a compilação do WebKit precisa; o Slackware não tem).
 baixar "https://dotat.at/prog/unifdef/unifdef-$UNIFDEF.tar.xz" "unifdef-$UNIFDEF.tar.xz" "$UNIFDEF_SHA256"
 tar xf "unifdef-$UNIFDEF.tar.xz"
-make -s -C "unifdef-$UNIFDEF" prefix=/usr/local install >/dev/null
+# C17: no C23 (o GCC do -current), `constexpr` virou palavra reservada e o unifdef a usa como nome.
+make -s -C "unifdef-$UNIFDEF" CFLAGS="-O2 -std=gnu17" prefix=/usr/local install >/dev/null
 # O código do WebKitGTK (a soma é a publicada em webkitgtk.org, no .sums da versão).
 baixar "https://webkitgtk.org/releases/webkitgtk-$WEBKIT.tar.xz" "webkitgtk-$WEBKIT.tar.xz" "$WEBKIT_SHA256"
 tar xf "webkitgtk-$WEBKIT.tar.xz"

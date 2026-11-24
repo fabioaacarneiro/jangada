@@ -41,6 +41,10 @@ const ABAS_H: f32 = 32.0;
 const FAVS_H: f32 = 26.0;
 const ACHAR_H: f32 = 32.0;
 const STATUS_H: f32 = 20.0;
+/// O grafite da janela privada (o alto e o baixo da barra).
+fn cor_privada() -> (Color, Color) {
+    (rgba(62, 58, 80, 255), rgba(46, 43, 60, 255))
+}
 /// A janela das Preferências.
 const JANELA_PREFS: u32 = 1;
 /// Onde se inicia a sessão do Google (volta para a página da conta).
@@ -244,6 +248,10 @@ struct Navegador {
     atual: usize,
     /// O texto da barra de endereço (editado) e se ela está sendo editada.
     barra: String,
+    /// O texto da barra em edição (com a seleção e a rolagem) e se já foi mexido desde
+    /// que ela pegou o foco (as sugestões só aparecem depois de digitar).
+    barra_buf: glove_ui::TextBuffer,
+    barra_mexida: bool,
     barra_foco: bool,
     focar_barra: bool,
     /// Área da página na janela (do quadro anterior).
@@ -656,7 +664,11 @@ impl Navegador {
     fn barra(&mut self, ui: &mut Ui) {
         let w = ui.c.w;
         let modern = ui.theme.modern;
-        if modern {
+        let privada = ajustes::privada();
+        if privada {
+            // A janela privada se vê de longe: a barra e as abas em grafite, em qualquer tema.
+            ui.c.fill_rect(0.0, 0.0, w, BARRA_H, &vgrad(0.0, BARRA_H, &[(0.0, cor_privada().0), (1.0, cor_privada().1)]));
+        } else if modern {
             ui.c.fill_rect(0.0, 0.0, w, BARRA_H, &solid(ui.theme.body_a));
         } else {
             ui.c.fill_rect(0.0, 0.0, w, BARRA_H, &vgrad(0.0, BARRA_H, &[(0.0, rgba(236, 236, 236, 255)), (1.0, rgba(212, 212, 216, 255))]));
@@ -731,6 +743,19 @@ impl Navegador {
         let fw = (livre.1 - livre.0).clamp(120.0, 640.0);
         let fx = ((w - fw) / 2.0).max(livre.0).min(livre.1 - fw);
         let fr = Rect::new(fx, ((BARRA_H - CAMPO_H) / 2.0).round(), fw, CAMPO_H);
+        // O selo "Privada", ao lado do endereço (quando cabe).
+        if privada {
+            let rotulo = tr!("Privada");
+            let lw = ui.fonts.measure(rotulo, 11.0, true) + 18.0;
+            // À direita do campo (é onde sobra espaço); senão, à esquerda.
+            let direita = fr.x + fr.w + 8.0;
+            let bx = if direita + lw <= dir - 4.0 { direita } else { fr.x - lw - 8.0 };
+            if bx > x0 + 96.0 {
+                let by = fr.y + (CAMPO_H - 18.0) / 2.0;
+                ui.c.fill(rrect(bx, by, lw, 18.0, 9.0), &solid(rgba(124, 96, 220, 255)));
+                ui.fonts.draw(ui.c, rotulo, bx + 9.0, by + 13.0, 11.0, true, Color::WHITE);
+            }
+        }
         let autofocus = std::mem::take(&mut self.focar_barra);
         // Clique numa sugestão: vale já no apertar. O campo perde o foco nesse mesmo quadro
         // (o botão desceu fora dele) e a lista some; esperar o soltar perdia o clique.
@@ -751,11 +776,16 @@ impl Navegador {
             }
         }
         if autofocus {
-            // O campo começa vazio: digitar já troca o endereço; Esc devolve.
-            self.barra.clear();
+            // O endereço inteiro, todo escolhido: digitar troca tudo; clicar de novo põe o
+            // cursor no lugar para mudar só um pedaço. Esc devolve.
+            let inteiro = if self.eh_inicio(&url) || url.starts_with("data:") { String::new() } else { url.clone() };
+            self.barra_buf = glove_ui::TextBuffer::new(inteiro);
+            self.barra_mexida = false;
         }
         if self.barra_foco || autofocus {
-            let (_, enter) = ui.text_field_in(fr, &mut self.barra, autofocus);
+            let (mexeu, enter) = ui.line_edit(fr, &mut self.barra_buf, autofocus);
+            self.barra_mexida |= mexeu;
+            self.barra = self.barra_buf.text().to_string();
             self.barra_foco = ui.has_focus();
             if self.barra.is_empty() {
                 let dica = if ajustes::privada() { tr!("Janela privada: nada fica guardado").to_string() } else { tr!("Buscar ou digitar um endereço").to_string() };
@@ -774,7 +804,7 @@ impl Navegador {
             let digitado = self.barra.trim().to_string();
             if enter {
                 // a lista e a escolha ficam como estavam
-            } else if self.barra_foco && !digitado.is_empty() {
+            } else if self.barra_foco && !digitado.is_empty() && self.barra_mexida {
                 let antes = self.sugestoes.clone();
                 self.sugestoes = sugestoes_para(&digitado, &self.favoritos, &self.recentes_todos);
                 if self.sugestoes != antes {
@@ -812,9 +842,9 @@ impl Navegador {
         } else {
             // Fora de foco: uma pílula com o site no meio (e o cadeado), como no Safari.
             let hit = ui.hit(fr);
-            let fill = if ui.theme.dark { rgba(58, 58, 62, 255) } else if modern { rgba(0, 0, 0, 14) } else { Color::WHITE };
+            let fill = if privada { rgba(255, 255, 255, 30) } else if ui.theme.dark { rgba(58, 58, 62, 255) } else if modern { rgba(0, 0, 0, 14) } else { Color::WHITE };
             ui.c.fill(rrect(fr.x, fr.y, fr.w, fr.h, 7.0), &solid(fill));
-            if !modern {
+            if !modern && !privada {
                 ui.c.stroke(rrect(fr.x + 0.5, fr.y + 0.5, fr.w - 1.0, fr.h - 1.0, 7.0), &solid(rgba(190, 190, 196, 255)), 1.0);
             }
             let vazio = self.eh_inicio(&url) || url.is_empty();
@@ -828,7 +858,13 @@ impl Navegador {
                 let cor = cor_glifo(ui, 0.7);
                 sem_troca(ui.c, |c| cadeado(c, tx - 14.0, fr.y + (CAMPO_H - 10.0) / 2.0, cor));
             }
-            ui.fonts.draw(ui.c, &t, tx, fr.y + CAMPO_H / 2.0 + 4.5, 13.0, false, if vazio { rgba(150, 150, 156, 255) } else { tinta() });
+            let cor_texto = match (privada, vazio) {
+                (true, true) => rgba(176, 172, 196, 255),
+                (true, false) => rgba(238, 236, 246, 255),
+                (false, true) => rgba(150, 150, 156, 255),
+                (false, false) => tinta(),
+            };
+            ui.fonts.draw(ui.c, &t, tx, fr.y + CAMPO_H / 2.0 + 4.5, 13.0, false, cor_texto);
             if hit.clicked {
                 self.focar_barra = true;
                 ui.redraw = true;
@@ -877,10 +913,13 @@ impl Navegador {
     /// espaço livre da faixa também arrasta a janela. Devolve a altura usada.
     fn faixa_abas(&mut self, ui: &mut Ui, y: f32) -> f32 {
         let w = ui.c.w;
-        let escuro = ui.theme.dark;
+        let privada = ajustes::privada();
+        let escuro = ui.theme.dark || privada;
         let modern = ui.theme.modern;
         // Faixa < aba de fundo < aba escolhida (do mais escuro para o mais claro).
-        let (fundo, apagada, acesa, escolhida) = if escuro {
+        let (fundo, apagada, acesa, escolhida) = if privada {
+            (rgba(34, 32, 44, 255), rgba(48, 46, 60, 255), rgba(58, 56, 72, 255), rgba(76, 72, 96, 255))
+        } else if escuro {
             (rgba(30, 30, 33, 255), rgba(42, 42, 46, 255), rgba(52, 52, 57, 255), rgba(70, 70, 75, 255))
         } else if modern {
             (rgba(218, 218, 222, 255), rgba(228, 228, 232, 255), rgba(236, 236, 240, 255), Color::WHITE)
@@ -922,7 +961,7 @@ impl Navegador {
             if let Some(ic) = &self.abas[i].icone {
                 ui.c.draw_canvas(ic, lx - iw, r.y + (r.h - 16.0) / 2.0);
             }
-            let cor = if sel { tinta() } else { rgba(90, 90, 96, 255) };
+            let cor = if privada { if sel { rgba(242, 240, 250, 255) } else { rgba(176, 172, 196, 255) } } else if sel { tinta() } else { rgba(90, 90, 96, 255) };
             ui.fonts.draw(ui.c, &t, lx, r.y + r.h / 2.0 + 4.5, 12.0, false, cor);
             // O × aparece ao passar o mouse (e na escolhida), à esquerda.
             if h.hover || sel {
@@ -1890,7 +1929,7 @@ fn escudo(c: &mut Canvas, cx: f32, cy: f32, cor: Color, cheio: bool) {
 }
 
 fn cor_glifo(ui: &Ui, forca: f32) -> Color {
-    let (forte, fraco) = if ui.theme.dark { (228.0, 70.0) } else { (64.0, 200.0) };
+    let (forte, fraco) = if ui.theme.dark || ajustes::privada() { (228.0, 70.0) } else { (64.0, 200.0) };
     let v = (fraco + (forte - fraco) * forca.clamp(0.0, 1.0)) as u8;
     rgba(v, v, v.saturating_add(4), 255)
 }
@@ -2216,6 +2255,9 @@ impl App for Navegador {
             top += self.barra_favoritos(ui, top);
             top += self.barra_achar(ui, top);
         }
+        // Sem o puxador do kit no canto (ele ficava por cima da página): a janela se
+        // redimensiona pelas bordas. Depois dos botões da janela (o zoom continua ligado).
+        ui.hide_resize_grip();
         let aviso = self.aviso.as_ref().map(|(_, t)| t.elapsed()).filter(|d| *d < Duration::from_secs(5));
         if let Some(d) = aviso {
             // O aviso some sozinho.
@@ -2531,6 +2573,8 @@ fn main() -> std::process::ExitCode {
         abas: Vec::new(),
         atual: 0,
         barra: String::new(),
+        barra_buf: glove_ui::TextBuffer::default(),
+        barra_mexida: false,
         barra_foco: false,
         focar_barra: false,
         area: Rect::new(0.0, BARRA_H, 1100.0, 700.0),
