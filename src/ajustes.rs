@@ -148,7 +148,7 @@ fn ler_lista(nome: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Janela privada (`--privada`): nada do que é visitado ou guardado como uso (favoritos,
+/// Janela privada (`--private`): nada do que é visitado ou guardado como uso (favoritos,
 /// histórico, abas da última vez) é gravado. Ajustes e a própria escolha de escudos valem.
 pub static PRIVADA: AtomicBool = AtomicBool::new(false);
 
@@ -300,13 +300,13 @@ pub fn limpar_historico() {
     let _ = std::fs::remove_file(pasta().join("historico.tsv"));
 }
 
-pub fn sessao() -> Vec<String> {
-    ler_lista("sessao.tsv").into_iter().map(|(_, u)| u).collect()
+/// As abas da última vez: (título, endereço).
+pub fn sessao() -> Vec<(String, String)> {
+    ler_lista("sessao.tsv")
 }
 
-pub fn gravar_sessao(urls: &[String]) {
-    let v: Vec<(String, String)> = urls.iter().map(|u| (String::new(), u.clone())).collect();
-    gravar_lista("sessao.tsv", &v);
+pub fn gravar_sessao(abas: &[(String, String)]) {
+    gravar_lista("sessao.tsv", abas);
 }
 
 // ---------------------------------------------------------------------------

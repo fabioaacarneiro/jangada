@@ -41,7 +41,7 @@ ola/
 **`ola.js`** é JavaScript comum, com acesso à página (`document`):
 
 ```js
-// Roda em cada página que bate com "matches", quando ela termina de carregar.
+// Roda em cada página que bate com "matches", assim que o documento dela fica pronto.
 var aviso = document.createElement("div");
 aviso.textContent = "Olá da Jangada! Clique para fechar.";
 aviso.style.cssText =
@@ -57,11 +57,11 @@ document.body.append(aviso);
 Instale e abra o site:
 
 ```sh
-jangada --instalar ./ola      # mostra o que a extensão pede e pergunta antes de instalar
+jangada --install ./ola       # mostra o que a extensão pede e pergunta antes de instalar
 jangada https://example.com
 ```
 
-O aviso aparece no canto de baixo. Mudou o script? Instale de novo (`jangada --instalar ./ola`) e
+O aviso aparece no canto de baixo. Mudou o script? Instale de novo (`jangada --install ./ola`) e
 recarregue a página: a versão nova entra no lugar da anterior.
 
 Esses dois arquivos estão em [`exemplos/ola/`](../exemplos/ola/). Um exemplo com CSS e com dados
@@ -107,7 +107,8 @@ lugar do esquema e o `<all_urls>` valem só para http e https.
 
 ## Quando e onde o script roda
 
-- **Quando:** depois que a página termina de carregar, uma vez por carregamento. Num site que
+- **Quando:** assim que o documento da página fica pronto (o HTML já lido; as imagens podem
+  ainda estar chegando), uma vez por carregamento. Num site que
   troca de tela sem recarregar (YouTube, redes sociais), o script não roda de novo sozinho: se
   precisar acompanhar, observe a página (`MutationObserver`) ou o endereço (`location.href`).
 - **Onde:** na página da aba (não nos quadros internos, os `<iframe>`).
@@ -159,13 +160,13 @@ página em que está.
 ## Instalar, atualizar, desligar e remover
 
 ```sh
-jangada --instalar ./minha-extensao      # uma pasta
-jangada --instalar ./minha-extensao.zip  # um .zip dela
-jangada --instalar https://github.com/usuario/repositorio
-jangada --instalar https://github.com/usuario/repositorio/tree/RAMO/PASTA
-jangada --instalar ./minha-extensao --sim   # sem perguntar (para scripts)
-jangada --extensoes                      # lista: identificador, nome, versão, ativa ou desligada
-jangada --remover IDENTIFICADOR
+jangada --install ./minha-extensao        # uma pasta
+jangada --install ./minha-extensao.zip    # um .zip dela
+jangada --install https://github.com/usuario/repositorio
+jangada --install https://github.com/usuario/repositorio/tree/RAMO/PASTA
+jangada --install ./minha-extensao --yes  # sem perguntar (para scripts)
+jangada --extensions                      # lista: identificador, nome, versão, ativa ou desligada
+jangada --remove IDENTIFICADOR
 ```
 
 Pela janela: **Preferências ▸ Instaladas**. Digite a pasta, o `.zip` ou o link, clique em

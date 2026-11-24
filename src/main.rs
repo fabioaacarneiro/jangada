@@ -52,6 +52,8 @@ const GOOGLE_LOGIN: &str = "https://accounts.google.com/ServiceLogin?continue=ht
 const JANELA_HIST: u32 = 2;
 const JANELA_DOWN: u32 = 3;
 const JANELA_IMPORTAR: u32 = 4;
+/// A janela de um prompt() de uma página (a pergunta com o campo do texto).
+const JANELA_PERGUNTA: u32 = 5;
 
 /// Zoom das páginas (porcentagem) e o nível do motor (cada nível = ×1,2).
 const ZOOMS: [u32; 7] = [67, 80, 90, 100, 110, 125, 150];
@@ -180,6 +182,24 @@ mod tests {
     }
 
     #[test]
+    fn faixa_de_abas_que_rola() {
+        let (mut primeira, mut seguida) = (0, (0, 0));
+        // Cabem todas: nada rola.
+        assert_eq!(janela_de_abas(5, 4, 1100.0, 208.0, &mut primeira, &mut seguida), (0, 5));
+        // 20 abas de 80 em 1100 pontos: cabem 12 (com as setas), e a faixa vai até a escolhida.
+        assert_eq!(janela_de_abas(20, 0, 1100.0, 80.0, &mut primeira, &mut seguida), (0, 12));
+        assert_eq!(janela_de_abas(20, 19, 1100.0, 80.0, &mut primeira, &mut seguida), (8, 12));
+        // Rolou com a roda para o começo: a faixa fica onde a pessoa pôs.
+        primeira = 0;
+        assert_eq!(janela_de_abas(20, 19, 1100.0, 80.0, &mut primeira, &mut seguida), (0, 12));
+        // Escolheu outra fora da vista: a faixa a acompanha.
+        assert_eq!(janela_de_abas(20, 15, 1100.0, 80.0, &mut primeira, &mut seguida), (4, 12));
+        // Fecharam abas: a primeira não passa do fim.
+        primeira = 8;
+        assert_eq!(janela_de_abas(14, 3, 1100.0, 80.0, &mut primeira, &mut seguida), (2, 12));
+    }
+
+    #[test]
     fn janela_cabe_na_tela() {
         assert_eq!(caber(None, None), (1100, 760));
         assert_eq!(caber(Some(1920), Some(1080)), (1100, 760));
@@ -239,6 +259,16 @@ struct Aba {
     p: Shared,
     /// O ícone do site, em 16 pontos.
     icone: Option<Canvas>,
+}
+
+/// Um prompt() de uma página à espera do texto (numa janela própria).
+struct Pergunta {
+    pagina: std::rc::Weak<std::cell::RefCell<motor::Pagina>>,
+    dialogo: webkit6::ScriptDialog,
+    site: String,
+    mensagem: String,
+    texto: String,
+    focar: bool,
 }
 
 /// A seção aberta nas Preferências.
@@ -315,8 +345,8 @@ struct Navegador {
     fechadas: Vec<String>,
     /// As abas da última vez que a Jangada fechou (Histórico ▸ Reabrir as Abas da Última
     /// Sessão) e o que já foi gravado desta vez.
-    sessao_anterior: Vec<String>,
-    sessao_gravada: Vec<String>,
+    sessao_anterior: Vec<(String, String)>,
+    sessao_gravada: Vec<(String, String)>,
     /// A folha Imprimir (a página já em PDF).
     imprimir: Option<glove_ui::print::PrintSheet>,
     /// Janela do histórico: pedida, a busca, a lista filtrada, a escolha e a rolagem.
@@ -341,6 +371,13 @@ struct Navegador {
     ext_rx: Option<std::sync::mpsc::Receiver<Result<extensoes::Extensao, String>>>,
     ext_confirmar: Option<extensoes::Extensao>,
     ext_msg: Option<String>,
+    /// A faixa de abas quando não cabem todas: a primeira à vista, a (escolhida, quantas)
+    /// que a faixa já acompanhou e o resto da roda do mouse.
+    aba_primeira: usize,
+    aba_seguida: (usize, usize),
+    aba_rolagem: f32,
+    /// O prompt() de uma página à espera da resposta.
+    pergunta_js: Option<Pergunta>,
     /// O lugar das páginas na janela (embaixo do desenho da Jangada).
     host: Option<glove_ui::NativeHost>,
     /// A aba que está na janela agora (as outras ficam escondidas).
@@ -413,6 +450,78 @@ impl Navegador {
         }
     }
 
+    /// Uma aba por trás que só carrega o endereço quando for escolhida (até lá, com o
+    /// título que ela tinha).
+    fn abrir_adiada(&mut self, url: &str, titulo: &str) {
+        if let Some(p) = motor::nova_aba_adiada(url, titulo) {
+            self.pôr_aba(p, true);
+        }
+    }
+
+    /// A resposta a um prompt() (None: cancelado). A janela da pergunta fecha em seguida.
+    fn responder_pergunta(&mut self, texto: Option<&str>) {
+        let Some(q) = self.pergunta_js.take() else { return };
+        // A aba ainda existe? (Fechada, o diálogo já foi junto com ela.)
+        if let Some(p) = q.pagina.upgrade() {
+            if let Some(t) = texto {
+                q.dialogo.prompt_set_text(t);
+            }
+            q.dialogo.close();
+            p.borrow_mut().dialog = None;
+        }
+        self.mudou = true;
+        glove_ui::redraw_soon();
+    }
+
+    /// A janela de um prompt(): a mensagem da página, o campo do texto, Cancelar e OK.
+    fn janela_pergunta(&mut self, ui: &mut Ui) {
+        let (w, h) = (ui.c.w, ui.c.h);
+        ui.c.fill_rect(0.0, 0.0, w, h, &solid(ui.theme.body_a));
+        let Some(q) = self.pergunta_js.as_mut() else {
+            ui.close = true;
+            return;
+        };
+        let titulo = tr!("A página {} pergunta:", q.site);
+        // Mensagens enormes ficam no começo (a janela tem tamanho fixo).
+        let msg: String = if q.mensagem.chars().count() > 220 { q.mensagem.chars().take(220).chain("…".chars()).collect() } else { q.mensagem.clone() };
+        let foco = std::mem::take(&mut q.focar);
+        let mut texto = std::mem::take(&mut q.texto);
+        let mut resposta: Option<bool> = None;
+        if ui.keys().iter().any(|k| k.key == glove_ui::ui::Key::Escape) {
+            resposta = Some(false);
+        }
+        ui.area(Rect::new(20.0, 16.0, w - 40.0, h - 76.0), |ui| {
+            ui.label_ex(&titulo, 12.0, true, tinta());
+            ui.space(4.0);
+            ui.paragraph(&msg);
+        });
+        let (_, enter) = ui.text_field_in(Rect::new(20.0, h - 84.0, w - 40.0, 22.0), &mut texto, foco);
+        if enter {
+            resposta = Some(true);
+        }
+        ui.area(Rect::new(w - 200.0, h - 46.0, 180.0, 30.0), |ui| {
+            ui.horizontal(|ui| {
+                if ui.button(tr!("Cancelar")) {
+                    resposta = Some(false);
+                }
+                if ui.default_button(tr!("OK")) {
+                    resposta = Some(true);
+                }
+            });
+        });
+        match resposta {
+            Some(ok) => {
+                self.responder_pergunta(ok.then_some(texto.as_str()));
+                ui.close = true;
+            }
+            None => {
+                if let Some(q) = self.pergunta_js.as_mut() {
+                    q.texto = texto;
+                }
+            }
+        }
+    }
+
     /// Uma aba nova (já com a página) entra na faixa.
     fn pôr_aba(&mut self, p: Shared, fundo: bool) {
         if self.aj.zoom != 0.0 {
@@ -460,7 +569,14 @@ impl Navegador {
         if self.a_vista.as_ref() == Some(&v) {
             self.a_vista = None;
         }
-        let divide = a.p.borrow().parentes.get();
+        // Uma aba que nunca carregou não tem processo para encerrar.
+        let divide = a.p.borrow().parentes.get() || a.p.borrow().adiada;
+        // Um prompt() desta aba à espera vai junto, antes de a página fechar (o diálogo
+        // não pode sobrar depois dela).
+        if self.pergunta_js.as_ref().is_some_and(|q| q.pagina.upgrade().is_some_and(|p| std::rc::Rc::ptr_eq(&p, &a.p))) {
+            self.pergunta_js = None;
+            glove_ui::redraw_soon();
+        }
         drop(a);
         motor::fechar_pagina(&v, divide);
         if self.abas.is_empty() {
@@ -540,7 +656,7 @@ impl Navegador {
             "Ctrl+Shift+N" => {
                 // Outra janela (um processo), com o armazenamento só em memória.
                 if let Ok(exe) = std::env::current_exe() {
-                    let _ = std::process::Command::new(exe).arg("--privada").spawn();
+                    let _ = std::process::Command::new(exe).arg("--private").spawn();
                 }
             }
             "Ctrl+W" => self.fechar(self.atual),
@@ -627,8 +743,14 @@ impl Navegador {
         let abertas: Vec<String> = self.abas.iter().map(|a| a.p.borrow().url.clone()).collect();
         // A aba vazia da página inicial dá lugar às da sessão.
         let so_inicio = self.abas.len() == 1 && abertas.first().is_some_and(|u| self.eh_inicio(u) || u.is_empty());
-        for u in lista.iter().filter(|u| !abertas.contains(u)) {
-            self.abrir(u);
+        // A primeira carrega já; as outras, quando forem escolhidas.
+        let mut primeira = true;
+        for (t, u) in lista.iter().filter(|(_, u)| !abertas.contains(u)) {
+            if std::mem::take(&mut primeira) {
+                self.abrir(u);
+            } else {
+                self.abrir_adiada(u, t);
+            }
         }
         if so_inicio && self.abas.len() > 1 {
             self.fechar(0);
@@ -638,10 +760,19 @@ impl Navegador {
 
     /// As abas abertas agora (para a próxima vez), gravadas quando mudam.
     fn gravar_sessao(&mut self) {
-        let urls: Vec<String> = self.abas.iter().map(|a| a.p.borrow().url.clone()).filter(|u| !u.is_empty() && !u.starts_with("data:") && !u.starts_with("devtools:") && !self.eh_inicio(u)).collect();
-        if urls != self.sessao_gravada {
-            ajustes::gravar_sessao(&urls);
-            self.sessao_gravada = urls;
+        // Com o título: a aba reaberta já aparece com o nome dela, antes de carregar.
+        let abas: Vec<(String, String)> = self
+            .abas
+            .iter()
+            .map(|a| {
+                let p = a.p.borrow();
+                (p.title.clone(), p.url.clone())
+            })
+            .filter(|(_, u)| !u.is_empty() && !u.starts_with("data:") && !u.starts_with("devtools:") && !u.starts_with("view-source:") && !self.eh_inicio(u))
+            .collect();
+        if abas != self.sessao_gravada {
+            ajustes::gravar_sessao(&abas);
+            self.sessao_gravada = abas;
         }
     }
 
@@ -671,6 +802,28 @@ impl Navegador {
                 self.abrir(&u);
             }
         }
+    }
+
+    /// Uma pergunta de permissão numa faixa no alto da página (sem janela à parte): o
+    /// texto e Negar, Só desta vez, Permitir. Devolve o botão escolhido (0, 1 ou 2).
+    fn faixa_de_pergunta(ui: &mut Ui, area: Rect, titulo: &str) -> Option<usize> {
+        let r = Rect::new(area.x, area.y, area.w, 34.0);
+        let fundo = if ui.theme.dark { rgba(58, 58, 62, 255) } else { rgba(250, 244, 206, 255) };
+        ui.c.fill_rect(r.x, r.y, r.w, r.h, &solid(fundo));
+        ui.c.hline(r.x, r.y + r.h - 1.0, r.w, rgba(170, 170, 176, 255));
+        let t = ui.fonts.ellipsize(titulo, 12.0, true, (r.w - 350.0).max(60.0));
+        ui.fonts.draw(ui.c, &t, r.x + 12.0, r.y + 21.0, 12.0, true, tinta());
+        let mut escolha = None;
+        ui.area(Rect::new(r.x + r.w - 330.0, r.y + 5.0, 322.0, 24.0), |ui| {
+            ui.horizontal(|ui| {
+                for (i, b) in [tr!("Negar"), tr!("Só desta vez"), tr!("Permitir")].into_iter().enumerate() {
+                    if ui.small_button(b) {
+                        escolha = Some(i);
+                    }
+                }
+            });
+        });
+        escolha
     }
 
     /// Botão liso de barra (ícone num quadradinho que acende ao passar o mouse).
@@ -956,16 +1109,37 @@ impl Navegador {
         ui.c.fill_rect(0.0, y, w, ABAS_H, &solid(fundo));
         ui.c.hline(0.0, y, w, if escuro { rgba(0, 0, 0, 120) } else { rgba(0, 0, 0, 30) });
         ui.c.hline(0.0, y + ABAS_H - 1.0, w, if escuro { rgba(0, 0, 0, 160) } else { rgba(150, 150, 156, 255) });
-        let n = self.abas.len().max(1) as f32;
-        let (x0, gap, mais) = (6.0, 4.0, 28.0);
-        let tw = ((w - x0 * 2.0 - mais - gap * n) / n).clamp(80.0, 260.0);
-        let mut acao: Option<(usize, bool)> = None;
-        let mut fim = x0;
-        for i in 0..self.abas.len() {
-            let r = Rect::new(x0 + i as f32 * (tw + gap), y + 4.0, tw, ABAS_H - 8.0);
-            if r.x + r.w > w - mais - x0 {
-                break;
+        let total = self.abas.len();
+        let n = total.max(1) as f32;
+        let (x0, gap, mais, seta) = (6.0, 4.0, 28.0, 22.0);
+        let tw = ((w - x0 * 2.0 - mais - gap * n) / n).clamp(110.0, 260.0);
+        // Quando não cabem todas (cada uma tem no mínimo 110 pontos: menos que isso o título
+        // não se lê), a faixa rola: uma seta
+        // em cada ponta, a roda do mouse, e ela acompanha a aba escolhida. Antes, as que não
+        // cabiam ficavam fora do alcance do mouse.
+        let (primeira, cabem) = janela_de_abas(total, self.atual, w, tw, &mut self.aba_primeira, &mut self.aba_seguida);
+        let rola = cabem < total;
+        if rola {
+            self.aba_rolagem += ui.scroll_in(Rect::new(0.0, y, w, ABAS_H));
+            while self.aba_rolagem >= 15.0 {
+                self.aba_rolagem -= 15.0;
+                self.aba_primeira = (self.aba_primeira + 1).min(total - cabem);
             }
+            while self.aba_rolagem <= -15.0 {
+                self.aba_rolagem += 15.0;
+                self.aba_primeira = self.aba_primeira.saturating_sub(1);
+            }
+            if self.aba_primeira != primeira {
+                ui.redraw = true;
+            }
+        } else {
+            self.aba_rolagem = 0.0;
+        }
+        let x_abas = if rola { x0 + seta + 2.0 } else { x0 };
+        let mut acao: Option<(usize, bool)> = None;
+        let mut fim = x_abas;
+        for i in primeira..(primeira + cabem).min(total) {
+            let r = Rect::new(x_abas + (i - primeira) as f32 * (tw + gap), y + 4.0, tw, ABAS_H - 8.0);
             fim = r.x + r.w + gap;
             let h = ui.hit(r);
             let sel = i == self.atual;
@@ -1012,6 +1186,18 @@ impl Navegador {
             if h.clicked {
                 acao = Some((i, false));
             }
+        }
+        // As setas da faixa que rola (apagadas na ponta).
+        if rola {
+            if Self::botao(ui, Rect::new(x0, y + 4.0, seta, ABAS_H - 8.0), Glyph::Back, primeira > 0) {
+                self.aba_primeira = primeira - 1;
+                ui.redraw = true;
+            }
+            if Self::botao(ui, Rect::new(fim, y + 4.0, seta, ABAS_H - 8.0), Glyph::Forward, primeira + cabem < total) {
+                self.aba_primeira = primeira + 1;
+                ui.redraw = true;
+            }
+            fim += seta + 2.0;
         }
         // O + da aba nova, logo depois da última.
         let pr = Rect::new(fim, y + 4.0, mais, ABAS_H - 8.0);
@@ -1160,24 +1346,36 @@ impl Navegador {
     fn pôr_pagina(&mut self, area: Rect) {
         let Some(host) = self.host.clone() else { return };
         let atual = self.view();
+        for a in &self.abas {
+            let v = a.p.borrow().view.clone();
+            let escolhida = Some(&v) == atual.as_ref();
+            // As outras abas saem da tela (o motor para de desenhá-las), mas ficam com o
+            // lugar marcado: a página de uma aba aberta por trás carrega já no tamanho
+            // certo. Escondidas de vez, carregavam com tamanho zero, e alguns sites
+            // montavam o layout errado. (Antes de entrar na janela, para não piscar.)
+            if v.is_child_visible() != escolhida {
+                v.set_child_visible(escolhida);
+            }
+            // O tamanho das escondidas só muda quando forem escolhidas (redimensionar a
+            // janela não refaz o layout de todas as abas).
+            if v.parent().is_none() || escolhida {
+                host.place(&v, area.x, area.y, area.w, area.h);
+            }
+        }
         if self.a_vista != atual {
-            if let Some(v) = &self.a_vista {
-                v.set_visible(false);
-            }
-            if let Some(v) = &atual {
-                v.set_visible(true);
-            }
             self.a_vista = atual.clone();
             self.focar_pagina = true;
         }
-        for a in &self.abas {
-            let v = a.p.borrow().view.clone();
-            if Some(&v) != atual.as_ref() && v.is_visible() {
-                v.set_visible(false);
-            }
-            if v.parent().is_none() || Some(&v) == atual.as_ref() {
-                host.place(&v, area.x, area.y, area.w, area.h);
-            }
+        // A aba adiada foi escolhida: carrega agora.
+        let adiada = self.aba().and_then(|a| {
+            let mut p = a.p.borrow_mut();
+            std::mem::take(&mut p.adiada).then(|| {
+                p.loading = true;
+                (p.view.clone(), p.url.clone())
+            })
+        });
+        if let Some((v, url)) = adiada {
+            motor::carregar_adiada(&v, &url);
         }
     }
 
@@ -1292,7 +1490,7 @@ impl Navegador {
                 "reabrir-sessao" => self.reabrir_sessao(),
                 "nova-privada" => {
                     if let Ok(exe) = std::env::current_exe() {
-                        let _ = std::process::Command::new(exe).arg("--privada").spawn();
+                        let _ = std::process::Command::new(exe).arg("--private").spawn();
                     }
                 }
                 "importar" => self.imp_abrir = true,
@@ -2108,6 +2306,10 @@ impl App for Navegador {
     }
 
     fn close_window(&mut self, id: u32) -> bool {
+        if id == JANELA_PERGUNTA {
+            // Fechar a janela da pergunta é cancelar.
+            self.responder_pergunta(None);
+        }
         if id != 0 {
             return true;
         }
@@ -2213,6 +2415,7 @@ impl App for Navegador {
             JANELA_HIST => return self.janela_historico(ui),
             JANELA_DOWN => return self.janela_downloads(ui),
             JANELA_IMPORTAR => return self.janela_importar(ui),
+            JANELA_PERGUNTA => return self.janela_pergunta(ui),
             0 => {}
             // Outra janela (do kit): o navegador só se desenha na principal.
             _ => return,
@@ -2319,6 +2522,13 @@ impl App for Navegador {
         ui.set_title(&if titulo.is_empty() { nome.to_string() } else { format!("{titulo} — {nome}") });
         // alert()/confirm() da página: alerta do Glove (janela própria).
         let dialog = self.aba().and_then(|a| a.p.borrow().dialog.clone());
+        // prompt(): a pergunta numa janela própria, com o campo do texto (uma de cada vez).
+        if let (Some((motor::Dialogo::Pergunta(sugerido), msg, cb)), None, Some(a)) = (&dialog, &self.pergunta_js, self.aba()) {
+            self.pergunta_js = Some(Pergunta { pagina: std::rc::Rc::downgrade(&a.p), dialogo: cb.clone(), site: site(&self.url_atual()), mensagem: msg.clone(), texto: sugerido.clone(), focar: true });
+            ui.open_window(JANELA_PERGUNTA, WindowOptions { title: tr!("Pergunta da página").into(), app_id: "glove.Navegador".into(), size: (440, 190), fixed: true, min_size: None });
+        }
+        // (alert e confirm vão pelo alerta do Glove, mais abaixo.)
+        let dialog = dialog.filter(|d| !matches!(d.0, motor::Dialogo::Pergunta(_)));
         let guardar = senhas::PARA_GUARDAR.with(|p| p.borrow().first().cloned());
         // Permissões pedidas pelo site (câmera, microfone, localização, notificações): uma
         // pergunta de cada vez, numa janela de alerta própria. "Permitir" e "Negar" ficam
@@ -2329,7 +2539,16 @@ impl App for Navegador {
             let quer = nomes.iter().map(|n| tr(motor::rotulo_permissao(n)).to_string()).collect::<Vec<_>>().join(" e ");
             let titulo = tr!("{} quer usar {}?", site_, quer);
             let texto = tr!("Você decide agora. \"Permitir\" e \"Negar\" valem para este site da próxima vez; \"Só desta vez\" não fica guardado.");
-            if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &titulo, &texto, &[tr!("Negar"), tr!("Só desta vez"), tr!("Permitir")]) {
+            // A área de transferência é perguntada numa faixa dentro da janela: quem só queria
+            // colar responde ali mesmo, sem uma janela de alerta tirando o teclado da página.
+            let escolha = if nomes == ["transferencia"] {
+                let i = Self::faixa_de_pergunta(ui, area, &titulo);
+                self.focar_pagina |= i.is_some();
+                i
+            } else {
+                ui.alert(glove_ui::AlertKind::Note, &titulo, &texto, &[tr!("Negar"), tr!("Só desta vez"), tr!("Permitir")])
+            };
+            if let Some(i) = escolha {
                 let (_, _, pedido) = motor::PERMISSOES.with(|p| p.borrow_mut().remove(0));
                 let permitir = i != 0;
                 if i != 1 {
@@ -2363,7 +2582,8 @@ impl App for Navegador {
                     _ => {}
                 }
             }
-        } else if let Some((confirm, msg, cb)) = dialog {
+        } else if let Some((tipo, msg, cb)) = dialog {
+            let confirm = tipo == motor::Dialogo::Confirma;
             let botoes: Vec<&str> = if confirm { vec![tr!("Cancelar"), tr!("OK")] } else { vec![tr!("OK")] };
             let url = site(&self.url_atual());
             if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &tr!("A página {} diz:", url), &msg, &botoes) {
@@ -2426,14 +2646,14 @@ impl App for Navegador {
     }
 }
 
-/// `jangada --instalar ORIGEM [--sim]`: mostra o que a extensão pede e instala (pergunta antes,
-/// a não ser com --sim). ORIGEM: uma pasta, um .zip ou um repositório do GitHub.
+/// `jangada --install ORIGEM [--yes]`: mostra o que a extensão pede e instala (pergunta antes,
+/// a não ser com --yes). ORIGEM: uma pasta, um .zip ou um repositório do GitHub.
 fn instalar_pela_linha(resto: &[String]) -> std::process::ExitCode {
     let Some(origem) = resto.iter().find(|a| !a.starts_with("--")) else {
-        eprintln!("uso: jangada --instalar PASTA | ARQUIVO.zip | https://github.com/USUARIO/REPOSITORIO [--sim]");
+        eprintln!("usage: jangada --install FOLDER | FILE.zip | https://github.com/USER/REPOSITORY [--yes]");
         return 2.into();
     };
-    let sim = resto.iter().any(|a| a == "--sim");
+    let sim = resto.iter().any(|a| a == "--yes" || a == "--sim");
     let prep = match extensoes::preparar(origem) {
         Ok(e) => e,
         Err(e) => {
@@ -2492,14 +2712,38 @@ fn gerar_icones(dir: &std::path::Path) -> std::process::ExitCode {
     0.into()
 }
 
-/// A porta pedida com `--depurar [PORTA]` (padrão 9222), ou None sem a opção.
+/// As opções da linha de comando são em inglês. Os nomes de antes, em português
+/// (`--instalar`, `--privada`…), continuam aceitos para não quebrar atalhos e scripts
+/// antigos, mas não aparecem mais na ajuda nem na documentação.
+const AJUDA: &str = "Usage: jangada [OPTIONS] [URL...]
+
+Opens the URLs in tabs (in the window that is already open, if there is one).
+
+Options:
+  --private               open a private window (nothing is kept)
+  --debug [PORT]          serve the engine inspector on http://127.0.0.1:PORT (default 9222)
+  --install SOURCE [--yes]
+                          install an extension from a folder, a .zip or a GitHub link
+                          (--yes: do not ask for confirmation)
+  --extensions            list the installed extensions
+  --remove ID             remove an installed extension
+  --version               print the version
+  --help                  print this help
+";
+
+/// A opção é esta? (`ingles`, ou o nome de antes em português.)
+fn opcao(a: &str, ingles: &str, antiga: &str) -> bool {
+    a == ingles || a == antiga
+}
+
+/// A porta pedida com `--debug [PORTA]` (padrão 9222), ou None sem a opção.
 fn porta_depuracao() -> Option<u16> {
     let args: Vec<String> = std::env::args().collect();
-    let i = args.iter().position(|a| a == "--depurar")?;
+    let i = args.iter().position(|a| opcao(a, "--debug", "--depurar"))?;
     Some(args.get(i + 1).and_then(|p| p.parse::<u16>().ok()).filter(|p| *p != 0).unwrap_or(9222))
 }
 
-/// Os endereços da linha de comando: sem as opções e sem o número de `--depurar`.
+/// Os endereços da linha de comando: sem as opções e sem o número de `--debug`.
 fn enderecos_da_linha() -> Vec<String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut out = Vec::new();
@@ -2509,7 +2753,7 @@ fn enderecos_da_linha() -> Vec<String> {
             pular = false;
             continue;
         }
-        if a == "--depurar" {
+        if opcao(a, "--debug", "--depurar") {
             pular = args.get(i + 1).is_some_and(|p| p.parse::<u16>().is_ok());
             continue;
         }
@@ -2518,6 +2762,31 @@ fn enderecos_da_linha() -> Vec<String> {
         }
     }
     out
+}
+
+/// As abas que aparecem na faixa: (a primeira à vista, quantas cabem). Cabendo todas,
+/// (0, total). Senão, a faixa guarda um lugar para as setas e anda só o que for preciso
+/// para a escolhida aparecer, e só quando a escolhida (ou o número de abas) muda: rolar
+/// com a roda ou com as setas não é desfeito no quadro seguinte.
+fn janela_de_abas(total: usize, atual: usize, w: f32, tw: f32, primeira: &mut usize, seguida: &mut (usize, usize)) -> (usize, usize) {
+    let (x0, gap, mais, seta) = (6.0, 4.0, 28.0, 22.0);
+    if total == 0 || x0 * 2.0 + mais + total as f32 * (tw + gap) <= w + 0.5 {
+        *primeira = 0;
+        *seguida = (atual, total);
+        return (0, total);
+    }
+    let util = w - x0 * 2.0 - mais - (seta + 2.0) * 2.0;
+    let cabem = (((util + gap) / (tw + gap)).floor() as usize).clamp(1, total);
+    if *seguida != (atual, total) {
+        *seguida = (atual, total);
+        if atual < *primeira {
+            *primeira = atual;
+        } else if atual >= *primeira + cabem {
+            *primeira = atual + 1 - cabem;
+        }
+    }
+    *primeira = (*primeira).min(total - cabem);
+    (*primeira, cabem)
 }
 
 /// O tamanho da janela ao abrir: 1100 × 760, ou o que couber na menor tela ligada (num
@@ -2541,21 +2810,29 @@ fn caber(largura: Option<i32>, altura: Option<i32>) -> (u32, u32) {
 
 fn main() -> std::process::ExitCode {
     if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
-        if a == "--icones" {
+        if opcao(&a, "--icons", "--icones") {
             return gerar_icones(std::path::Path::new(&dir));
         }
     }
     // As extensões pela linha de comando (sem abrir o navegador).
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
-        Some("--instalar") => return instalar_pela_linha(&args[2..]),
-        Some("--extensoes") => {
+        Some("--help" | "-h") => {
+            print!("{AJUDA}");
+            return 0.into();
+        }
+        Some("--version") => {
+            println!("Jangada {VERSAO}");
+            return 0.into();
+        }
+        Some("--install" | "--instalar") => return instalar_pela_linha(&args[2..]),
+        Some("--extensions" | "--extensoes") => {
             for e in extensoes::listar() {
                 println!("{}\t{} {}\t{}", e.id, e.nome, e.versao, if e.ativa { "ativa" } else { "desligada" });
             }
             return 0.into();
         }
-        Some("--remover") => {
+        Some("--remove" | "--remover") => {
             let id = args.get(2).cloned().unwrap_or_default();
             extensoes::remover(&id);
             println!("{id} removida.");
@@ -2563,7 +2840,7 @@ fn main() -> std::process::ExitCode {
         }
         _ => {}
     }
-    // A porta de depuração (`--depurar [PORTA]`): o inspetor do motor fica aberto em
+    // A porta de depuração (`--debug [PORTA]`): o inspetor do motor fica aberto em
     // http://127.0.0.1:PORTA para outro navegador (só neste computador).
     let pedida = porta_depuracao();
     if let Some(p) = pedida {
@@ -2585,13 +2862,13 @@ fn main() -> std::process::ExitCode {
     let urls: Vec<String> = enderecos_da_linha().into_iter().map(|a| endereco(&a, &inicio_url, aj.busca_url())).collect();
     // Já aberta: manda os endereços para ela e sai.
     // A janela privada é outra janela: não manda os endereços para a normal e não a substitui.
-    let privada = std::env::args().any(|a| a == "--privada");
+    let privada = std::env::args().any(|a| opcao(&a, "--private", "--privada"));
     ajustes::PRIVADA.store(privada, std::sync::atomic::Ordering::Relaxed);
     let sock = socket_path();
     if !privada {
         if let Ok(mut c) = UnixStream::connect(&sock) {
             if pedida.is_some() {
-                eprintln!("jangada: já está aberta; a depuração só vale ao abrir a Jangada (feche-a e rode --depurar de novo)");
+                eprintln!("jangada: já está aberta; a depuração só vale ao abrir a Jangada (feche-a e rode --debug de novo)");
             }
             let text = if urls.is_empty() { "\n".to_string() } else { urls.join("\n") };
             let _ = c.write_all(text.as_bytes());
@@ -2674,6 +2951,10 @@ fn main() -> std::process::ExitCode {
         ext_rx: None,
         ext_confirmar: None,
         ext_msg: None,
+        aba_primeira: 0,
+        aba_seguida: (0, 0),
+        aba_rolagem: 0.0,
+        pergunta_js: None,
         host: None,
         a_vista: None,
         focar_pagina: false,
@@ -2694,8 +2975,13 @@ fn main() -> std::process::ExitCode {
             nav.abrir(u);
         }
     } else if aj_reabrir && !sessao.is_empty() {
-        for u in &sessao {
-            nav.abrir(u);
+        // Só a última (a que fica à vista) carrega já; as outras, quando forem escolhidas.
+        for (i, (t, u)) in sessao.iter().enumerate() {
+            if i + 1 == sessao.len() {
+                nav.abrir(u);
+            } else {
+                nav.abrir_adiada(u, t);
+            }
         }
     } else {
         nav.nova_aba();

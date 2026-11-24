@@ -32,8 +32,8 @@ pub struct Pagina {
     pub forward: bool,
     /// Menu de contexto pedido pela página (botão direito).
     pub ctx: Option<Contexto>,
-    /// Diálogo do JavaScript esperando resposta: (é confirm?, a mensagem, o diálogo).
-    pub dialog: Option<(bool, String, ScriptDialog)>,
+    /// Diálogo do JavaScript esperando resposta: (o tipo, a mensagem, o diálogo).
+    pub dialog: Option<(Dialogo, String, ScriptDialog)>,
     /// Endereço do link sob o mouse (mostrado embaixo, como nos navegadores).
     pub status: String,
     /// O ícone do site (RGBA pré-multiplicado, largura, altura) e se mudou.
@@ -53,6 +53,9 @@ pub struct Pagina {
     pub fonte: bool,
     /// Onde o mouse está na página (o menu de contexto abre ali).
     pub mouse: (f32, f32),
+    /// A aba ainda não carregou o endereço dela: carrega quando for escolhida (as abas da
+    /// última vez, reabertas por trás).
+    pub adiada: bool,
     /// A página pediu para fechar a própria aba (window.close()).
     pub fechar: bool,
     /// A aba divide o processo de página com outra: ela abriu uma janela (window.open,
@@ -67,6 +70,17 @@ impl Pagina {
         self.versao = self.versao.wrapping_add(1);
         glove_ui::redraw_soon();
     }
+}
+
+/// O tipo de um diálogo do JavaScript à espera da pessoa.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Dialogo {
+    /// alert(): só OK.
+    Alerta,
+    /// confirm(): Cancelar ou OK.
+    Confirma,
+    /// prompt(): um texto (o que a página sugere vem aqui), Cancelar ou OK.
+    Pergunta(String),
 }
 
 /// O que o botão direito pegou na página.
@@ -259,8 +273,25 @@ fn conteudo(m: &Motor) -> UserContentManager {
     if crate::ajustes::NAO_RASTREAR.load(std::sync::atomic::Ordering::Relaxed) {
         ucm.add_script(&webkit6::UserScript::new(NAO_RASTREAR, UserContentInjectedFrames::AllFrames, webkit6::UserScriptInjectionTime::Start, &[], &[]));
     }
+    // O documento ficou pronto (antes das imagens e do resto): é a hora dos scripts da
+    // Jangada (senhas, extensões). Esperar a página acabar de carregar demorava nas páginas
+    // pesadas, e nas que nunca acabam eles nem entravam.
+    // (E o aviso de que a página prendeu o mouse de fato: o pedido pode ser aceito e o
+    // sistema não prender.)
+    let texto = |t: &str| serde_json::to_string(t).unwrap_or_default();
+    let pronto = format!(
+        "window.webkit.messageHandlers.{MUNDO}.postMessage({});document.addEventListener('pointerlockchange',function(){{if(document.pointerLockElement)window.webkit.messageHandlers.{MUNDO}.postMessage({})}});",
+        texto(PRONTO),
+        texto(MOUSE_PRESO)
+    );
+    ucm.add_script(&webkit6::UserScript::for_world(&pronto, UserContentInjectedFrames::TopFrame, webkit6::UserScriptInjectionTime::End, MUNDO, &[], &[]));
     ucm
 }
+
+/// O aviso de "documento pronto" (vem do mundo isolado: a página não consegue mandá-lo).
+const PRONTO: &str = "\u{1}JANGADA:pronto";
+/// O aviso de que a página prendeu o mouse (pointer lock).
+const MOUSE_PRESO: &str = "\u{1}JANGADA:mouse";
 
 const NAO_RASTREAR: &str = "(function(){try{Object.defineProperty(Navigator.prototype,'globalPrivacyControl',{get:function(){return true},configurable:true});Object.defineProperty(Navigator.prototype,'doNotTrack',{get:function(){return '1'},configurable:true})}catch(e){}})();";
 
@@ -275,6 +306,26 @@ pub fn nova_aba(url: &str, relacionada: Option<&WebView>) -> Option<Shared> {
         b.build()
     })?;
     Some(preparar(view, url))
+}
+
+/// Uma aba que só carrega o endereço quando for escolhida (`carregar_adiada`): reabrir
+/// vinte abas da última vez não põe vinte páginas para carregar de uma vez.
+pub fn nova_aba_adiada(url: &str, titulo: &str) -> Option<Shared> {
+    let p = nova_aba("", None)?;
+    {
+        let mut p = p.borrow_mut();
+        p.url = url.to_string();
+        p.title = titulo.to_string();
+        p.loading = false;
+        p.adiada = true;
+    }
+    Some(p)
+}
+
+/// A aba adiada foi escolhida: carrega agora.
+pub fn carregar_adiada(view: &WebView, url: &str) {
+    filtros_para(view, url);
+    view.load_uri(url);
 }
 
 /// Uma aba que o motor já criou (window.open): só liga os sinais.
@@ -305,6 +356,7 @@ fn preparar(view: WebView, url: &str) -> Shared {
         tela_cheia: false,
         fonte: false,
         mouse: (0.0, 0.0),
+        adiada: false,
         fechar: false,
         parentes: Rc::new(Cell::new(false)),
         versao: 0,
@@ -471,21 +523,23 @@ fn ligar(p: &Shared, view: &WebView) {
         let fraco = fraco.clone();
         view.connect_script_dialog(move |_, d| {
             let t = d.dialog_type();
-            // Estes dois são respondidos na hora. Nada de `close()` aqui dentro: o motor
-            // solta o diálogo sozinho quando o sinal volta, e fechá-lo antes derrubava a
-            // Jangada inteira (qualquer página com prompt() ou com aviso de sair).
-            if t == ScriptDialogType::Prompt {
-                // Sem resposta: a página recebe "cancelado" (nulo).
-                return true;
-            }
+            // Este é respondido na hora. Nada de `close()` aqui dentro: o motor solta o
+            // diálogo sozinho quando o sinal volta, e fechá-lo antes derrubava a Jangada
+            // inteira (qualquer página com aviso de sair).
             if t == ScriptDialogType::BeforeUnloadConfirm {
                 // Sair da página sempre pode (como fechar a aba).
                 d.confirm_set_confirmed(true);
                 return true;
             }
+            // Os outros esperam a pessoa (o diálogo fica guardado: a página espera).
+            let tipo = match t {
+                ScriptDialogType::Confirm => Dialogo::Confirma,
+                ScriptDialogType::Prompt => Dialogo::Pergunta(d.prompt_get_default_text().map(|t| t.to_string()).unwrap_or_default()),
+                _ => Dialogo::Alerta,
+            };
             let Some(p) = fraco.upgrade() else { return false };
             let Ok(mut p) = p.try_borrow_mut() else { return false };
-            p.dialog = Some((t == ScriptDialogType::Confirm, d.message().map(|m| m.to_string()).unwrap_or_default(), d.clone()));
+            p.dialog = Some((tipo, d.message().map(|m| m.to_string()).unwrap_or_default(), d.clone()));
             p.mudou();
             true
         });
@@ -554,7 +608,8 @@ fn ligar(p: &Shared, view: &WebView) {
             false
         });
     }
-    // A página carregou: os scripts da Jangada (senhas, extensões).
+    // A página começou a carregar: os escudos do site e o estado da aba. (Os scripts da
+    // Jangada entram quando o documento fica pronto: veja `mensagem`.)
     {
         let c = com_pagina.clone();
         view.connect_load_changed(move |v, ev| {
@@ -566,14 +621,6 @@ fn ligar(p: &Shared, view: &WebView) {
                     p.erro_pedido = None;
                     p.status.clear();
                 });
-            }
-            if ev != LoadEvent::Finished {
-                return;
-            }
-            let url = v.uri().map(|u| u.to_string()).unwrap_or_default();
-            // Um por vez: um erro de escrita no script de uma extensão não leva os outros.
-            for js in crate::senhas::script_da_pagina(&url).into_iter().chain(crate::extensoes::scripts_para(&url)) {
-                v.evaluate_javascript(&js, Some(MUNDO), Some(&url), None::<&gio::Cancellable>, |_| {});
             }
         });
     }
@@ -647,6 +694,18 @@ fn ligar(p: &Shared, view: &WebView) {
 /// Uma mensagem de um script da Jangada na página (senhas, extensões).
 fn mensagem(view: &WebView, m: &str) {
     let url = view.uri().map(|u| u.to_string()).unwrap_or_default();
+    if m == PRONTO {
+        // Um por vez: um erro de escrita no script de uma extensão não leva os outros.
+        for js in crate::senhas::script_da_pagina(&url).into_iter().chain(crate::extensoes::scripts_para(&url)) {
+            view.evaluate_javascript(&js, Some(MUNDO), Some(&url), None::<&gio::Cancellable>, |_| {});
+        }
+        return;
+    }
+    if m == MOUSE_PRESO {
+        AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("A página prendeu o mouse: Esc solta.").to_string()));
+        glove_ui::redraw_soon();
+        return;
+    }
     if let Some(resto) = m.strip_prefix(crate::extensoes::MARCA) {
         if let Ok(pedido) = serde_json::from_str::<serde_json::Value>(resto) {
             let id = pedido["ext"].as_str().unwrap_or("").to_string();
@@ -689,7 +748,7 @@ fn mensagem(view: &WebView, m: &str) {
 }
 
 /// As chaves das permissões (guardadas em permissoes.tsv): camera, microfone,
-/// localizacao, notificacoes.
+/// localizacao, notificacoes, transferencia.
 fn pedido_de_permissao(view: &WebView, req: &PermissionRequest) -> bool {
     let origem = crate::importar::origem(&view.uri().map(|u| u.to_string()).unwrap_or_default());
     let mut nomes: Vec<&'static str> = Vec::new();
@@ -709,6 +768,15 @@ fn pedido_de_permissao(view: &WebView, req: &PermissionRequest) -> bool {
         nomes.push("localizacao");
     } else if req.is::<webkit6::NotificationPermissionRequest>() {
         nomes.push("notificacoes");
+    } else if req.type_().name() == "WebKitClipboardPermissionRequest" {
+        // Ler o que foi copiado (o botão "colar" de um site): a pessoa decide. (Pelo nome
+        // do tipo: ele só existe no WebKitGTK 2.42 em diante, e a Jangada roda nos de antes.)
+        nomes.push("transferencia");
+    } else if req.is::<webkit6::PointerLockPermissionRequest>() {
+        // Prender o mouse (jogos, visualizadores 3D): pode, e o Esc solta. (O aviso sai
+        // quando o mouse fica preso de verdade: veja `mensagem`.)
+        req.allow();
+        return true;
     } else {
         // O resto (armazenamento entre sites, mídia protegida etc.): o padrão do motor.
         return false;
@@ -735,6 +803,7 @@ pub fn rotulo_permissao(chave: &str) -> &'static str {
         "camera" => "a câmera",
         "microfone" => "o microfone",
         "localizacao" => "a localização",
+        "transferencia" => "a área de transferência",
         _ => "as notificações",
     }
 }

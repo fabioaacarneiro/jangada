@@ -699,3 +699,15 @@ msgstr "{} on {}"
 
 msgid "Privada"
 msgstr "Private"
+
+msgid "A página prendeu o mouse: Esc solta."
+msgstr "The page captured the mouse: Esc releases it."
+
+msgid "a área de transferência"
+msgstr "the clipboard"
+
+msgid "Pergunta da página"
+msgstr "Question from the page"
+
+msgid "A página {} pergunta:"
+msgstr "The page {} asks:"

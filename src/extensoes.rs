@@ -10,7 +10,7 @@
 //! comando, `jangada --instalar`, ou em Preferências ▸ Instaladas). Antes de instalar, a
 //! Jangada mostra o que a extensão pede.
 //!
-//! Os scripts rodam quando a página termina de carregar, no quadro principal, num mundo
+//! Os scripts rodam assim que o documento da página fica pronto, no quadro principal, num mundo
 //! isolado (o "jangada", o mesmo dos scripts da própria Jangada): veem o documento, mas
 //! não as variáveis da página, e a página não os vê.
 

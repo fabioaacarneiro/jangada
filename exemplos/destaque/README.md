@@ -4,7 +4,7 @@ Uma extensão de exemplo para a Jangada, um pouco além do mínimo: põe um avis
 páginas de `example.com` (com o estilo num arquivo CSS) e conta as visitas, guardando o número
 com `jangada.storage.local`.
 
-Instalar: `jangada --instalar exemplos/destaque` (ou pelo link do repositório, em
+Instalar: `jangada --install exemplos/destaque` (ou pelo link do repositório, em
 Preferências ▸ Instaladas).
 
 O menor exemplo está em `exemplos/ola/`, e o guia de como escrever uma extensão em

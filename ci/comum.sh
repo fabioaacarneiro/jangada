@@ -27,7 +27,7 @@ conferir() {
     [ -z "$falta" ] || { echo "ERRO: a Jangada não acha:"; echo "$falta"; exit 1; }
     # O programa abre (sem tela: só gera os ícones e sai).
     d=$(mktemp -d)
-    /usr/lib/jangada/jangada --icones "$d" || { echo "ERRO: a Jangada não abre"; exit 1; }
+    /usr/lib/jangada/jangada --icons "$d" || { echo "ERRO: a Jangada não abre"; exit 1; }
     rm -rf "$d"
     echo "Pacote conferido: instalado, com todas as bibliotecas."
 }

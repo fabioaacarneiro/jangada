@@ -46,9 +46,9 @@ vídeo* em Preferências ▸ Avançado, ou abra com `JANGADA_SEM_GPU=1 jangada`.
 - **Telas em 125% ou 150%:** o motor só desenha em escalas inteiras: a página é desenhada em 200% e
   reduzida. Fica um pouco menos nítida que as barras da Jangada (desenhadas na escala exata) e
   gasta mais placa de vídeo do que em 100% ou 200%.
-- **`prompt()`** das páginas (a caixa que pede um texto) é respondido como cancelado.
-- **Ler a área de transferência por script** (o botão "colar" de alguns sites) e **prender o
-  mouse** (jogos) são negados; Ctrl+V funciona normalmente.
+- **Prender o mouse no Glove:** a Jangada permite, mas o ambiente gráfico precisa oferecer o
+  travamento do ponteiro, e o Glove ainda não oferece: nele, os jogos que prendem o mouse
+  continuam sem prender.
 
 ## Desenvolvimento web
 
@@ -57,7 +57,7 @@ vídeo* em Preferências ▸ Avançado, ou abra com `JANGADA_SEM_GPU=1 jangada`.
   o inspetor do WebKit (elementos, console, rede, fontes, armazenamento, linha do tempo) abre junto
   da página da aba atual. Não abre porta nenhuma: só a Jangada fala com ele.
   Preferências ▸ Avançado põe também o **Inspecionar Elemento** no menu do botão direito.
-- **Depurar de outro navegador:** `jangada --depurar [PORTA]` (padrão 9222) abre o inspetor em
+- **Depurar de outro navegador:** `jangada --debug [PORTA]` (padrão 9222) abre o inspetor em
   `http://127.0.0.1:PORTA` (só neste computador) para outro navegador. Só vale ao abrir a Jangada:
   se ela já estiver aberta, feche-a antes.
 
@@ -72,6 +72,11 @@ pergunta volta.
 - **Câmera e microfone** vêm pelo GStreamer (com o PipeWire, pelo `gstreamer1.0-pipewire`).
 - **Localização:** pelo serviço de localização do sistema (GeoClue), se houver.
 - **Notificações** permitidas aparecem no avisador do sistema (o do Glove).
+- **Área de transferência:** quando um site quer ler o que você copiou (o botão "colar" dele), a
+  pergunta aparece numa faixa no alto da página, com as mesmas três respostas. Ctrl+V nunca
+  pergunta.
+- **Prender o mouse** (jogos, visualizadores 3D): a Jangada permite, e o Esc solta (no Glove ainda
+  não prende: veja "O que ainda não funciona").
 - **Captura da tela:** a Jangada não concede.
 
 ## Extensões
@@ -110,10 +115,11 @@ document.body.append(aviso);
 ```
 
 ```sh
-jangada --instalar ./ola                 # pasta ou .zip; mostra o que ela pede e pergunta
-jangada --instalar https://github.com/usuario/repositorio   # ou .../tree/RAMO/PASTA
-jangada --extensoes                      # lista as instaladas (ativa ou não)
-jangada --remover ID                     # tira uma
+jangada --install ./ola                  # pasta ou .zip; mostra o que ela pede e pergunta
+jangada --install https://github.com/usuario/repositorio   # ou .../tree/RAMO/PASTA
+jangada --extensions                     # lista as instaladas (ativa ou não)
+jangada --remove ID                      # tira uma
+jangada --help                           # todas as opções
 ```
 
 Também dá para instalar, ligar, desligar e remover em Preferências ▸ **Instaladas**. Nada entra
@@ -123,8 +129,8 @@ sem a sua confirmação.
   padrões de endereço (`<all_urls>`, `*://`, `*.dominio.com`, caminhos com `*`) e os dados
   guardados por extensão (`jangada.storage.local`: `get`, `set`, `remove` e `clear`). O objeto
   `jangada` também atende por `chrome`, para quem traz um script escrito para o Chrome.
-- **Quando roda:** depois que a página termina de carregar, na página da aba (não nos quadros
-  internos). O `run_at` do manifesto é ignorado.
+- **Quando roda:** assim que o documento da página fica pronto (sem esperar as imagens), na
+  página da aba (não nos quadros internos). O `run_at` do manifesto é ignorado.
 - **Mundo isolado:** os scripts das extensões (e os da Jangada, como o das senhas) rodam num mundo
   à parte: veem a página, mas a página não os vê nem fala com a Jangada por eles. Ainda assim, só
   instale extensões de quem você confia: elas leem as páginas em que entram.
@@ -177,7 +183,8 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
   acima da faixa, o ícone do site e o título no meio, o × ao passar o mouse e um + logo depois da
   última. Ctrl+T abre, Ctrl+W fecha, Ctrl+Shift+T reabre a última fechada, Ctrl+Tab passa; links
   que abrem janela nova viram abas, e o botão do meio (ou Ctrl + clique) abre o link numa aba por
-  trás. O botão do meio numa aba a fecha.
+  trás. O botão do meio numa aba a fecha. Quando não cabem todas, a faixa rola: uma seta em
+  cada ponta, a roda do mouse sobre a faixa, e ela acompanha a aba escolhida.
 - **Página inicial** própria, com a busca e os atalhos dos sites; **página de erro** própria. Em
   Preferências ▸ Geral dá para escolher o fundo (padrão, cinza claro, azul claro, grafite ou uma
   imagem do computador), e mostrar ou esconder os atalhos e a caixa de busca.
@@ -186,13 +193,14 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
 - **Touchpad:** dois dedos para os lados voltam e avançam.
 - **Downloads** direto na pasta Downloads (o que o motor não sabe mostrar, como um `.zip` ou um
   `.deb`, é baixado), com a janela Downloads (Ctrl+J, ou a seta na barra): o andamento, abrir,
-  mostrar na pasta e cancelar; **avisos das páginas** (alert e confirm) como alertas do
+  mostrar na pasta e cancelar; **avisos das páginas** (alert, confirm e prompt) como alertas do
   Glove, em janela própria; a mãozinha nos links e a barra de texto nos campos.
 - **Favoritos:** a estrela no campo de endereço (ou Ctrl+D) guarda a página; a barra de favoritos
   (Ctrl+Shift+B) e o menu Favoritos levam a elas, e a página inicial mostra os favoritos.
 - **Histórico:** os últimos sites no menu Histórico e todos na janela Histórico (Ctrl+H), com
   busca; Reabrir a Última Aba Fechada e **Reabrir as Abas da Última Sessão** (as abas que estavam
-  abertas da última vez que a Jangada fechou); Limpar o Histórico… nas Preferências.
+  abertas da última vez que a Jangada fechou; cada uma carrega quando é escolhida, para não abrir
+  vinte páginas de uma vez); Limpar o Histórico… nas Preferências.
 - **Buscar na página** (Ctrl+F), com quantos achou e anterior/próximo; **Imprimir** (Ctrl+P), pela
   folha Imprimir do Glove (impressoras do CUPS, cópias, páginas, pré-visualizar), e **Salvar como
   PDF** (menu Arquivo), na pasta Downloads.

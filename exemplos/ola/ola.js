@@ -1,4 +1,4 @@
-// Roda em cada página que bate com "matches", quando ela termina de carregar.
+// Roda em cada página que bate com "matches", assim que o documento dela fica pronto.
 var aviso = document.createElement("div");
 aviso.textContent = "Olá da Jangada! Clique para fechar.";
 aviso.style.cssText =

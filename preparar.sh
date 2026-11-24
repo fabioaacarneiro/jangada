@@ -38,7 +38,7 @@ if [ -n "$JANGADA_MOTOR" ]; then
 fi
 ln -sf ../lib/jangada/jangada "$tmp/usr/bin/jangada"
 # O ícone nos tamanhos do tema (menus e lançadores de fora do Glove).
-"$d/jangada" --icones "$tmp/usr/share/icons/hicolor" || die "não deu para gerar os ícones"
+"$d/jangada" --icons "$tmp/usr/share/icons/hicolor" || die "não deu para gerar os ícones"
 cat > "$tmp/usr/share/applications/jangada.desktop" <<'DESK'
 [Desktop Entry]
 Type=Application
