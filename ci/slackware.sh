@@ -13,12 +13,13 @@ sp() { slackpkg -batch=on -default_answer=y "$@"; }
 yes | sp update gpg >/dev/null
 sp update >/dev/null
 # As séries d (compiladores) e l (bibliotecas), e da x o que o motor usa (mesa, drm,
-# wayland, X11 para os cabeçalhos). Do resto, o mínimo para baixar e conferir.
+# wayland, X11 para os cabeçalhos).
 sp install d >/dev/null
 sp install l >/dev/null
 sp install x >/dev/null
-sp install curl wget ca-certificates openssl cyrus-sasl nghttp2 nghttp3 libssh2 libpsl brotli zstd \
-    kernel-headers dbus elogind eudev libgudev >/dev/null || true
+# A série n inteira (o curl e o wget com todas as bibliotecas deles: ngtcp2, nghttp3…).
+sp install n >/dev/null
+sp install kernel-headers dbus elogind eudev libgudev >/dev/null || true
 update-ca-certificates --fresh >/dev/null 2>&1 || true
 motor_raiz="$PWD/motor-slackware"
 sh ci/motor-slackware.sh "$motor_raiz"
