@@ -16,10 +16,22 @@ WEBKIT=2.54.3
 WEBKIT_SHA256=2779c1b46f88762e8400650271ba14452dc4e30b37059981552d8b562b7d0862
 UNIFDEF=2.12
 UNIFDEF_SHA256=43ce0f02ecdcdc723b2475575563ddb192e988c886d368260bc0a63aee3ac400
-# Baixa e confere pela soma fixada aqui (IPv4: no contêiner o IPv6 não sai).
+# Baixa do primeiro endereço que responder e confere pela soma fixada aqui (IPv4: no
+# contêiner o IPv6 não sai). Mais de um endereço: o servidor do unifdef costuma derrubar a
+# conexão, e sem outro a compilação inteira parava ali.
+#   baixar ARQUIVO SOMA ENDEREÇO...
 baixar() {
-    curl -4 -fsSL --retry 3 --max-time 900 -o "$2" "$1" || wget -4 -q -O "$2" "$1"
-    echo "$3  $2" | sha256sum -c -
+    arquivo=$1
+    soma=$2
+    shift 2
+    for endereco in "$@"; do
+        if curl -4 -fsSL --retry 3 --retry-all-errors --max-time 900 -o "$arquivo" "$endereco" || wget -4 -q -O "$arquivo" "$endereco"; then
+            echo "$soma  $arquivo" | sha256sum -c - && return 0
+        fi
+        echo "motor-slackware.sh: não veio de $endereco" >&2
+    done
+    echo "motor-slackware.sh: não consegui baixar $arquivo" >&2
+    return 1
 }
 motor="$destino/usr/lib/jangada/motor"
 if [ -f "$motor/VERSAO" ] && [ "$(cat "$motor/VERSAO")" = "$WEBKIT" ]; then
@@ -32,12 +44,14 @@ trab=$(mktemp -d)
 trap 'rm -rf "$trab"' EXIT
 cd "$trab"
 # O unifdef (a compilação do WebKit precisa; o Slackware não tem).
-baixar "https://dotat.at/prog/unifdef/unifdef-$UNIFDEF.tar.xz" "unifdef-$UNIFDEF.tar.xz" "$UNIFDEF_SHA256"
+baixar "unifdef-$UNIFDEF.tar.xz" "$UNIFDEF_SHA256" \
+    "https://dotat.at/prog/unifdef/unifdef-$UNIFDEF.tar.xz" \
+    "https://sources.voidlinux.org/unifdef-$UNIFDEF/unifdef-$UNIFDEF.tar.xz"
 tar xf "unifdef-$UNIFDEF.tar.xz"
 # C17: no C23 (o GCC do -current), `constexpr` virou palavra reservada e o unifdef a usa como nome.
 make -s -C "unifdef-$UNIFDEF" CFLAGS="-O2 -std=gnu17" prefix=/usr/local install >/dev/null
 # O código do WebKitGTK (a soma é a publicada em webkitgtk.org, no .sums da versão).
-baixar "https://webkitgtk.org/releases/webkitgtk-$WEBKIT.tar.xz" "webkitgtk-$WEBKIT.tar.xz" "$WEBKIT_SHA256"
+baixar "webkitgtk-$WEBKIT.tar.xz" "$WEBKIT_SHA256" "https://webkitgtk.org/releases/webkitgtk-$WEBKIT.tar.xz"
 tar xf "webkitgtk-$WEBKIT.tar.xz"
 cd "webkitgtk-$WEBKIT"
 # Só o que a Jangada usa (sem documentação, MiniBrowser, WebDriver, gamepad, voz). A
