@@ -15,7 +15,7 @@ use std::rc::Rc;
 use glove_ui::gtk::{self, gdk, gio, glib, prelude::*};
 use webkit6::prelude::*;
 use webkit6::{
-    CookieAcceptPolicy, CookiePersistentStorage, Download, FindOptions, HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NetworkSession, PermissionRequest, PolicyDecisionType, PrintOperation, ScriptDialog, ScriptDialogType, Settings, UserContentFilter, UserContentFilterStore, UserContentInjectedFrames, UserContentManager, UserStyleLevel, UserStyleSheet, WebContext, WebView,
+    CookieAcceptPolicy, CookiePersistentStorage, Download, FindOptions, HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NetworkSession, PermissionRequest, PolicyDecisionType, PrintOperation, ScriptDialog, ScriptDialogType, Settings, UserContentFilter, UserContentInjectedFrames, UserContentManager, UserStyleLevel, UserStyleSheet, WebContext, WebView,
 };
 
 /// O mundo isolado dos scripts da Jangada (e o nome do canal deles para cá).
@@ -23,8 +23,6 @@ pub const MUNDO: &str = "jangada";
 
 /// O que uma aba sabe da página (escrito pelos sinais do motor, lido pela janela).
 pub struct Pagina {
-    /// Número da aba (para os escudos e as permissões).
-    pub id: u64,
     pub view: WebView,
     pub title: String,
     pub url: String,
@@ -120,7 +118,6 @@ thread_local! {
     pub static PERMISSOES: RefCell<Vec<(String, Vec<&'static str>, Permissao)>> = const { RefCell::new(Vec::new()) };
     /// As abas abertas (para achar a `Pagina` de uma mensagem dos scripts).
     static ABAS: RefCell<Vec<std::rc::Weak<RefCell<Pagina>>>> = const { RefCell::new(Vec::new()) };
-    static PROXIMA: Cell<u64> = const { Cell::new(1) };
     static PROXIMO_DOWNLOAD: Cell<u32> = const { Cell::new(1) };
 }
 
@@ -176,12 +173,17 @@ pub fn iniciar(privada: bool, dados: &Path, aj: &crate::ajustes::Ajustes) {
     ajustes.set_enable_encrypted_media(true);
     ajustes.set_media_playback_requires_user_gesture(false);
     ajustes.set_enable_site_specific_quirks(true);
-    // O nome do motor fica o do Safari (o padrão do WebKit): os sites tratam a Jangada
-    // como o Safari e mandam a versão completa deles.
+    // Os sites veem o Safari (o motor é o mesmo): mandam a versão completa deles, e os que
+    // conferem a versão do navegador (WhatsApp Web, bancos) aceitam. O WebKit ainda corrige
+    // por site o que algum site exigir (as "quirks" ligadas acima).
+    ajustes.set_user_agent(Some(AGENTE));
     let escuro = aj.escuro_nas_paginas.then(|| UserStyleSheet::new(ESCURO, UserContentInjectedFrames::AllFrames, UserStyleLevel::User, &[], &[]));
     MOTOR.with(|m| *m.borrow_mut() = Some(Motor { sessao, ajustes, filtros: Vec::new(), escuro }));
     aplicar_cookies(crate::ajustes::COOKIES_TERCEIROS.load(std::sync::atomic::Ordering::Relaxed));
 }
+
+/// Como a Jangada se apresenta aos sites: o Safari no Linux, na versão de agora.
+pub const AGENTE: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Safari/605.1.15";
 
 /// O modo escuro nas páginas: a página invertida (as imagens e vídeos voltam ao normal).
 const ESCURO: &str = "html{filter:invert(0.92) hue-rotate(180deg)!important;background:#fff!important}\
@@ -236,18 +238,29 @@ fn abas_abertas() -> Vec<Shared> {
     })
 }
 
-fn pagina_de(view: &WebView) -> Option<Shared> {
-    abas_abertas().into_iter().find(|p| p.try_borrow().is_ok_and(|p| p.view == *view))
+/// O que vai em toda página de uma aba: o canal dos scripts da Jangada, o modo escuro e o
+/// pedido para não rastrear.
+fn conteudo(m: &Motor) -> UserContentManager {
+    let ucm = UserContentManager::new();
+    ucm.register_script_message_handler(MUNDO, Some(MUNDO));
+    if let Some(e) = &m.escuro {
+        ucm.add_style_sheet(e);
+    }
+    // Não Rastrear e GPC: o motor não deixa mudar os cabeçalhos dos pedidos; os sites leem
+    // o pedido pela página (navigator.globalPrivacyControl e navigator.doNotTrack), que é o
+    // que o GPC define para os scripts.
+    if crate::ajustes::NAO_RASTREAR.load(std::sync::atomic::Ordering::Relaxed) {
+        ucm.add_script(&webkit6::UserScript::new(NAO_RASTREAR, UserContentInjectedFrames::AllFrames, webkit6::UserScriptInjectionTime::Start, &[], &[]));
+    }
+    ucm
 }
+
+const NAO_RASTREAR: &str = "(function(){try{Object.defineProperty(Navigator.prototype,'globalPrivacyControl',{get:function(){return true},configurable:true});Object.defineProperty(Navigator.prototype,'doNotTrack',{get:function(){return '1'},configurable:true})}catch(e){}})();";
 
 /// Uma aba nova. `relacionada`: a aba que pediu (window.open: a nova fica ligada a ela).
 pub fn nova_aba(url: &str, relacionada: Option<&WebView>) -> Option<Shared> {
     let view = com(|m| {
-        let ucm = UserContentManager::new();
-        ucm.register_script_message_handler(MUNDO, Some(MUNDO));
-        if let Some(e) = &m.escuro {
-            ucm.add_style_sheet(e);
-        }
+        let ucm = conteudo(m);
         let mut b = WebView::builder().network_session(&m.sessao).user_content_manager(&ucm).settings(&m.ajustes);
         if let Some(r) = relacionada {
             b = b.related_view(r);
@@ -263,9 +276,7 @@ pub fn aba_criada(view: WebView, url: &str) -> Shared {
 }
 
 fn preparar(view: WebView, url: &str) -> Shared {
-    let id = PROXIMA.with(|n| n.replace(n.get() + 1));
     let p: Shared = Rc::new(RefCell::new(Pagina {
-        id,
         view: view.clone(),
         title: String::new(),
         url: url.to_string(),
@@ -394,6 +405,8 @@ fn ligar(p: &Shared, view: &WebView) {
     // Onde o mouse está (o menu de contexto abre ali).
     {
         let m = gtk::EventControllerMotion::new();
+        // Antes do motor (ele fica com os eventos dele).
+        m.set_propagation_phase(gtk::PropagationPhase::Capture);
         let fraco = fraco.clone();
         m.connect_motion(move |_, x, y| {
             if let Some(p) = fraco.upgrade() {
@@ -475,11 +488,7 @@ fn ligar(p: &Shared, view: &WebView) {
                 return None;
             }
             let nova = com(|m| {
-                let ucm = UserContentManager::new();
-                ucm.register_script_message_handler(MUNDO, Some(MUNDO));
-                if let Some(e) = &m.escuro {
-                    ucm.add_style_sheet(e);
-                }
+                let ucm = conteudo(m);
                 WebView::builder().related_view(v).user_content_manager(&ucm).settings(&m.ajustes).build()
             })?;
             let fundo = acao.mouse_button() == 2;
@@ -488,22 +497,22 @@ fn ligar(p: &Shared, view: &WebView) {
             Some(nova.upcast())
         });
     }
-    // Botão do meio ou Ctrl + clique num link: aba nova por trás. A navegação da aba
-    // escolhe os escudos do site antes de pedir qualquer coisa.
+    // Botão do meio ou Ctrl + clique num link: aba nova por trás.
     {
-        view.connect_decide_policy(move |v, d, tipo| {
-            if tipo == PolicyDecisionType::NavigationAction {
-                let Some(n) = d.downcast_ref::<NavigationPolicyDecision>() else { return false };
-                let Some(acao) = n.navigation_action() else { return false };
-                let url = acao.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
-                let ctrl = gdk::ModifierType::from_bits_truncate(acao.modifiers()).contains(gdk::ModifierType::CONTROL_MASK);
-                if (acao.mouse_button() == 2 || ctrl) && acao.navigation_type() == webkit6::NavigationType::LinkClicked && !url.is_empty() {
-                    d.ignore();
-                    NOVAS_ABAS.with(|n| n.borrow_mut().push((url, true, None)));
-                    glove_ui::redraw_soon();
-                    return true;
-                }
-                filtros_para(v, &url);
+        view.connect_decide_policy(move |_, d, tipo| {
+            if tipo != PolicyDecisionType::NavigationAction && tipo != PolicyDecisionType::NewWindowAction {
+                return false;
+            }
+            let Some(n) = d.downcast_ref::<NavigationPolicyDecision>() else { return false };
+            let Some(acao) = n.navigation_action() else { return false };
+            let url = acao.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+            let ctrl = gdk::ModifierType::from_bits_truncate(acao.modifiers()).contains(gdk::ModifierType::CONTROL_MASK);
+            // O motor manda o botão do meio e o Ctrl + clique como "janela nova".
+            if (acao.mouse_button() == 2 || ctrl) && acao.navigation_type() == webkit6::NavigationType::LinkClicked && !url.is_empty() {
+                d.ignore();
+                NOVAS_ABAS.with(|n| n.borrow_mut().push((url, true, None)));
+                glove_ui::redraw_soon();
+                return true;
             }
             false
         });
@@ -513,6 +522,8 @@ fn ligar(p: &Shared, view: &WebView) {
         let c = com_pagina.clone();
         view.connect_load_changed(move |v, ev| {
             if ev == LoadEvent::Started {
+                // Os escudos do site (ligados ou não nele) antes de a página pedir o resto.
+                filtros_para(v, &v.uri().map(|u| u.to_string()).unwrap_or_default());
                 c(&|p| {
                     p.erro_mostrando = std::mem::take(&mut p.erro_alt);
                     p.erro_pedido = None;
@@ -722,7 +733,10 @@ fn novo_download(d: &Download) {
             }
         });
     });
-    d.connect_finished(move |_| {
+    d.connect_finished(move |d| {
+        if std::env::var_os("JANGADA_DEBUG").is_some() {
+            eprintln!("download pronto: {:?}", d.destination());
+        }
         let mut nome = String::new();
         atualizar(id, |x| {
             if !x.cancelado {

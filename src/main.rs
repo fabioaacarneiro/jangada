@@ -31,7 +31,6 @@ use glove_ui::{
 
 use glove_ui::gtk::glib;
 use motor::Shared;
-use std::rc::Rc;
 
 pub const VERSAO: &str = env!("CARGO_PKG_VERSION");
 
@@ -256,8 +255,6 @@ struct Navegador {
     na_sugestao: bool,
     aviso: Option<(String, Instant)>,
     servidor: Option<UnixListener>,
-    /// Última vez que algo mexeu (o motor trabalha mais rápido logo depois).
-    ativo: Instant,
     /// O que o último menu de contexto pegou (o item escolhido chega depois).
     ctx_dados: Option<motor::Contexto>,
     /// A página inicial da Jangada (file://…/inicio.html) e onde ela é gravada.
@@ -301,8 +298,6 @@ struct Navegador {
     /// Sessão) e o que já foi gravado desta vez.
     sessao_anterior: Vec<String>,
     sessao_gravada: Vec<String>,
-    /// Assinatura do estado das abas (a janela só é refeita quando muda).
-    assinatura: u64,
     /// A folha Imprimir (a página já em PDF).
     imprimir: Option<glove_ui::print::PrintSheet>,
     /// Janela do histórico: pedida, a busca, a lista filtrada, a escolha e a rolagem.
@@ -2543,7 +2538,6 @@ fn main() -> std::process::ExitCode {
         na_sugestao: false,
         aviso: None,
         servidor,
-        ativo: Instant::now(),
         ctx_dados: None,
         inicio: inicio_url,
         dados,
@@ -2569,7 +2563,6 @@ fn main() -> std::process::ExitCode {
         fechadas: Vec::new(),
         sessao_anterior: if aj_reabrir { Vec::new() } else { sessao.clone() },
         sessao_gravada: Vec::new(),
-        assinatura: 0,
         imprimir: None,
         hist_abrir: false,
         hist_busca: String::new(),

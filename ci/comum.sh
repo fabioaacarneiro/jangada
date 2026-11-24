@@ -19,14 +19,15 @@ instalar_rust() {
 # as bibliotecas (um pacote com dependência errada falha aqui, e não no computador de quem
 # baixou).
 conferir() {
-    for f in /usr/bin/jangada /usr/lib/jangada/jangada /usr/lib/jangada/libcef.so \
-             /usr/lib/jangada/chrome-sandbox /usr/share/applications/jangada.desktop; do
+    for f in /usr/bin/jangada /usr/lib/jangada/jangada /usr/share/applications/jangada.desktop \
+             /usr/share/icons/hicolor/48x48/apps/jangada.png; do
         [ -e "$f" ] || { echo "ERRO: o pacote não instalou $f"; exit 1; }
     done
     falta=$(ldd /usr/lib/jangada/jangada | grep "not found" || true)
     [ -z "$falta" ] || { echo "ERRO: a Jangada não acha:"; echo "$falta"; exit 1; }
-    falta=$(ldd /usr/lib/jangada/libcef.so | grep "not found" || true)
-    [ -z "$falta" ] || { echo "ERRO: o motor não acha:"; echo "$falta"; exit 1; }
-    ls -l /usr/lib/jangada/chrome-sandbox
+    # O programa abre (sem tela: só gera os ícones e sai).
+    d=$(mktemp -d)
+    /usr/lib/jangada/jangada --icones "$d" || { echo "ERRO: a Jangada não abre"; exit 1; }
+    rm -rf "$d"
     echo "Pacote conferido: instalado, com todas as bibliotecas."
 }
