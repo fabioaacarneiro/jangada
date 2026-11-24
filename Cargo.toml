@@ -1,12 +1,12 @@
 [package]
 name = "jangada"
-# Jangada, o navegador do Glove OS: o motor do Chromium (CEF) desenhando a página dentro
-# de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
+# Jangada, o navegador do Glove OS: o motor do WebKitGTK (o do sistema, atualizado pela
+# distribuição) dentro de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
 version = "1.15.1"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
-description = "Jangada: o navegador do Glove OS (motor do Chromium, janela do Glove)"
+description = "Jangada: o navegador do Glove OS (motor WebKitGTK, janela do Glove)"
 repository = "https://github.com/fabioaacarneiro/jangada"
 
 [[bin]]
@@ -14,8 +14,9 @@ name = "jangada"
 path = "src/main.rs"
 
 [dependencies]
-cef = "=156.7.0"
-glove-ui = { path = "ui/crates/ui" }
+# O motor: o WebKitGTK 6.0 (GTK 4), o da distribuição.
+webkit6 = "0.6"
+glove-ui = { path = "ui/crates/ui", features = ["gtk"] }
 glove-config = { path = "ui/crates/config" }
 # O motor de bloqueio do Brave (EasyList, EasyPrivacy, filtros cosméticos).
 # O chaveiro do sistema (Secret Service): as senhas guardadas e a chave do Chrome.
@@ -29,7 +30,9 @@ aes = "0.8"
 cbc = "0.1"
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 sha1 = "0.10"
-adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling"] }
+# O motor de bloqueio do Brave lê as listas (EasyList etc.) e as converte para os filtros
+# nativos do WebKit (o formato do Safari: barrados pelo próprio motor, sem script na página).
+adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "content-blocking"] }
 
 [profile.release]
 opt-level = 3

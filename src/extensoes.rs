@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-/// A marca das mensagens das extensões para a Jangada (pelo console da página).
+/// A marca das mensagens das extensões para a Jangada (pelo canal do mundo isolado).
 pub const MARCA: &str = "\u{1}JANGADA:x:";
 
 /// Uma extensão instalada (ou preparada para instalar).
@@ -351,11 +351,11 @@ pub fn script_para(url: &str) -> Option<String> {
 }
 
 /// O objeto `chrome` mínimo de uma extensão (executado na página): runtime.id e getURL,
-/// storage.local (get, set, remove, que vão para a Jangada pela marca do console).
+/// storage.local (get, set, remove, que vão para a Jangada pelo canal do mundo isolado).
 fn chrome_de(id: &str) -> String {
     format!(
         "(function(){{var id={};var pend={{}},n=0;window.__jangadaResposta=window.__jangadaResposta||function(k,d){{var f=pend[k];if(f){{delete pend[k];f(d)}}}};\
-function op(t,d,cb){{var k=++n;var p=new Promise(function(res){{pend[k]=function(r){{if(cb)cb(r);res(r)}}}});console.debug({marca}+JSON.stringify({{ext:id,op:t,k:k,d:d}}));return p}}\
+function op(t,d,cb){{var k=++n;var p=new Promise(function(res){{pend[k]=function(r){{if(cb)cb(r);res(r)}}}});window.webkit.messageHandlers.jangada.postMessage({marca}+JSON.stringify({{ext:id,op:t,k:k,d:d}}));return p}}\
 var local={{get:function(c,cb){{return op('get',c==null?null:c,cb)}},set:function(o,cb){{return op('set',o,cb)}},remove:function(c,cb){{return op('remove',c,cb)}}}};\
 var listener={{addListener:function(){{}},removeListener:function(){{}},hasListener:function(){{return false}}}};\
 return {{runtime:{{id:id,getURL:function(p){{return 'jangada-extension://'+id+'/'+String(p||'').replace(/^\\//,'')}},onMessage:listener,lastError:null}},storage:{{local:local,onChanged:listener}}}}}})()",

@@ -20,14 +20,17 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use ajustes::Ajustes;
-use cef::{ImplBrowser, ImplBrowserHost, ImplCommandLine, ImplCookieManager, ImplFrame, ImplJsdialogCallback, ImplMediaAccessCallback, ImplPermissionPromptCallback};
+use glove_ui::gtk::prelude::*;
+use webkit6::prelude::*;
+use webkit6::WebView;
 use glove_config::tr;
 use glove_ui::{
     paint::{draw::*, icons::Glyph, tiny_skia, Color, Fonts},
     run, App, Column, Cursor, Menu, MenuItem, Rect, TableRow, TableState, TableStyle, Ui, WindowOptions, SEGMENT_H, SEGMENT_W,
 };
 
-use motor::{Pagina, Shared};
+use glove_ui::gtk::glib;
+use motor::Shared;
 use std::rc::Rc;
 
 pub const VERSAO: &str = env!("CARGO_PKG_VERSION");
@@ -51,6 +54,11 @@ const JANELA_IMPORTAR: u32 = 4;
 const ZOOMS: [u32; 7] = [67, 80, 90, 100, 110, 125, 150];
 fn nivel(pct: u32) -> f64 {
     (pct as f64 / 100.0).ln() / 1.2f64.ln()
+}
+
+/// O fator de zoom do motor para um nível (cada nível = ×1,2).
+fn fator(nivel: f64) -> f64 {
+    1.2f64.powf(nivel)
 }
 
 pub fn pasta_downloads() -> PathBuf {
@@ -169,20 +177,6 @@ mod tests {
     }
 
     #[test]
-    fn inspetor_acha_a_pagina_da_aba() {
-        let l: Vec<serde_json::Value> = serde_json::from_str(r#"[
-            {"id":"I","type":"page","url":"devtools://devtools/bundled/inspector.html?ws=x","title":"DevTools"},
-            {"id":"A","type":"page","url":"https://ex.com/","title":"Um"},
-            {"id":"B","type":"page","url":"https://ex.com/","title":"Dois"},
-            {"id":"W","type":"service_worker","url":"https://ex.com/sw.js","title":""}
-        ]"#).unwrap();
-        assert_eq!(escolher_pagina(&l, "https://ex.com/", "Dois").as_deref(), Some("B"));
-        assert_eq!(escolher_pagina(&l, "https://ex.com/", "Outro").as_deref(), Some("A"));
-        assert!(escolher_pagina(&l, "https://ex.com/sw.js", "").is_none());
-        assert!(escolher_pagina(&l, "devtools://devtools/bundled/inspector.html?ws=x", "DevTools").is_none());
-    }
-
-    #[test]
     fn sugestao_pela_altura() {
         assert_eq!(sugestao_na_altura(2.0, 3), None);
         assert_eq!(sugestao_na_altura(10.0, 3), Some(0));
@@ -229,14 +223,8 @@ mod tests {
 
 struct Aba {
     p: Shared,
-    /// A lista suspensa da página (<select>), pronta para a janela.
-    popup: Option<Canvas>,
     /// O ícone do site, em 16 pontos.
     icone: Option<Canvas>,
-    /// O zoom padrão já foi aplicado.
-    zoom_ok: bool,
-    /// O motor já sabe que a aba está escondida (abas de fundo não desenham).
-    oculta: bool,
 }
 
 /// A seção aberta nas Preferências.
@@ -262,9 +250,8 @@ struct Navegador {
     /// Área da página na janela (do quadro anterior).
     area: Rect,
     escala: f32,
-    /// O mouse estava sobre a página (para avisar a saída).
-    dentro: bool,
-    apertado: bool,
+    /// A página deve pegar o teclado no próximo quadro (depois de navegar, trocar de aba).
+    focar_pagina: bool,
     /// O botão desceu sobre a lista de sugestões: até ele subir, a página não recebe o mouse.
     na_sugestao: bool,
     aviso: Option<(String, Instant)>,
@@ -340,8 +327,10 @@ struct Navegador {
     ext_rx: Option<std::sync::mpsc::Receiver<Result<extensoes::Extensao, String>>>,
     ext_confirmar: Option<extensoes::Extensao>,
     ext_msg: Option<String>,
-    /// Ferramentas do desenvolvedor: o endereço do inspetor da aba, sendo procurado.
-    dev_rx: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
+    /// O lugar das páginas na janela (embaixo do desenho da Jangada).
+    host: Option<glove_ui::NativeHost>,
+    /// A aba que está na janela agora (as outras ficam escondidas).
+    a_vista: Option<WebView>,
     /// Preferências ▸ Senhas: as guardadas (sem os segredos), a escolhida, a rolagem e a
     /// senha à vista.
     senhas_lista: Option<Vec<chaveiro::Login>>,
@@ -364,12 +353,8 @@ impl Navegador {
         self.abas.get(self.atual)
     }
 
-    fn browser(&self) -> Option<cef::Browser> {
-        self.aba().and_then(|a| a.p.borrow().browser.clone())
-    }
-
-    fn host(&self) -> Option<cef::BrowserHost> {
-        self.browser().and_then(|b| b.host())
+    fn view(&self) -> Option<WebView> {
+        self.aba().map(|a| a.p.borrow().view.clone())
     }
 
     fn url_atual(&self) -> String {
@@ -398,39 +383,32 @@ impl Navegador {
         self.abrir_em(url, false);
     }
 
-    /// Ferramentas do desenvolvedor: o inspetor que vem no motor, numa aba ao lado, ligado
-    /// à página da aba atual pela porta local de depuração. A lista de páginas vem da
-    /// própria porta (numa linha à parte: quem responde é o motor, que roda nesta).
+    /// Ferramentas do desenvolvedor: o inspetor do motor (o do Safari), numa janela ao
+    /// lado, ligado à página da aba atual.
     fn ferramentas(&mut self) {
-        let porta = motor::DEPURACAO.load(std::sync::atomic::Ordering::Relaxed);
-        if porta == 0 {
-            self.aviso = Some((tr!("Ligue as Ferramentas do Desenvolvedor em Preferências ▸ Avançado e abra a Jangada de novo.").into(), Instant::now()));
-            self.mudou = true;
-            return;
+        motor::ferramentas_dev(true);
+        if let Some(v) = self.view() {
+            motor::inspecionar(&v);
         }
-        let (url, titulo) = (self.url_atual(), self.titulo_atual());
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(inspetor_de(porta, &url, &titulo));
-        });
-        self.dev_rx = Some(rx);
     }
 
     /// Abre uma aba; `fundo`: por trás (a escolhida continua a mesma).
     fn abrir_em(&mut self, url: &str, fundo: bool) {
-        let p: Shared = std::rc::Rc::new(std::cell::RefCell::new(Pagina::new(self.escala)));
-        {
-            let mut pg = p.borrow_mut();
-            pg.w = self.area.w.max(100.0) as i32;
-            pg.h = self.area.h.max(100.0) as i32;
-            pg.url = url.to_string();
+        if let Some(p) = motor::nova_aba(url, None) {
+            self.pôr_aba(p, fundo);
         }
-        if motor::nova_aba(&p, url) {
-            self.abas.push(Aba { p, popup: None, icone: None, zoom_ok: false, oculta: false });
-            if !fundo || self.abas.len() == 1 {
-                self.mudar(self.abas.len() - 1);
-            }
+    }
+
+    /// Uma aba nova (já com a página) entra na faixa.
+    fn pôr_aba(&mut self, p: Shared, fundo: bool) {
+        if self.aj.zoom != 0.0 {
+            p.borrow().view.set_zoom_level(fator(self.aj.zoom));
         }
+        self.abas.push(Aba { p, icone: None });
+        if !fundo || self.abas.len() == 1 {
+            self.mudar(self.abas.len() - 1);
+        }
+        self.mudou = true;
     }
 
     /// Aba nova na página inicial, com o cursor na barra de endereço.
@@ -441,24 +419,11 @@ impl Navegador {
     }
 
     fn mudar(&mut self, i: usize) {
-        if let Some(h) = self.host() {
-            h.was_hidden(1);
-        }
-        if let Some(a) = self.abas.get_mut(self.atual) {
-            a.oculta = true;
-        }
         self.atual = i.min(self.abas.len().saturating_sub(1));
-        if let Some(a) = self.abas.get_mut(self.atual) {
-            a.oculta = false;
-            // A imagem da aba volta inteira na próxima pintura.
-            a.p.borrow_mut().dirty = true;
-        }
-        if let Some(h) = self.host() {
-            h.was_hidden(0);
-            h.set_focus(1);
-        }
         self.mudou = true;
         self.barra_foco = false;
+        // A página da aba vai para a janela no próximo quadro (e fica com o teclado).
+        self.focar_pagina = true;
     }
 
     fn fechar(&mut self, i: usize) {
@@ -473,13 +438,14 @@ impl Navegador {
                 self.fechadas.remove(0);
             }
         }
-        let b = a.p.borrow().browser.clone();
-        if let Some(b) = &b {
-            escudos::esquecer(b.identifier());
+        let v = a.p.borrow().view.clone();
+        if let Some(h) = &self.host {
+            h.remove(&v);
         }
-        if let Some(h) = b.and_then(|b| b.host()) {
-            h.close_browser(1);
+        if self.a_vista.as_ref() == Some(&v) {
+            self.a_vista = None;
         }
+        v.terminate_web_process();
         if self.abas.is_empty() {
             self.nova_aba();
         } else {
@@ -489,21 +455,13 @@ impl Navegador {
 
     fn carregar(&mut self, url: &str) {
         let url = endereco(url, &self.inicio, self.aj.busca_url());
-        match self.browser().and_then(|b| b.main_frame()) {
-            Some(f) => f.load_url(Some(&url.as_str().into())),
-            // O motor ainda está criando a aba: carrega quando ela ficar pronta.
-            None => {
-                if let Some(a) = self.aba() {
-                    a.p.borrow_mut().pendente = Some(url.clone());
-                }
-            }
-        }
         if let Some(a) = self.aba() {
-            a.p.borrow_mut().url = url.clone();
+            let mut p = a.p.borrow_mut();
+            p.fonte = false;
+            p.url = url.clone();
+            p.view.load_uri(&url);
         }
-        if let Some(h) = self.host() {
-            h.set_focus(1);
-        }
+        self.focar_pagina = true;
     }
 
     fn eh_favorito(&self, url: &str) -> bool {
@@ -530,15 +488,22 @@ impl Navegador {
     /// Atalhos da Jangada (do teclado ou dos menus). `pagina`: o foco está na página
     /// (copiar, colar etc. vão para ela). Devolve se tratou.
     fn atalho(&mut self, combo: &str, pagina: bool) -> bool {
-        let b = self.browser();
-        let frame = || b.as_ref().and_then(|b| b.focused_frame().or_else(|| b.main_frame()));
+        let b = self.view();
+        let editar = |c: &str| {
+            if let Some(v) = &b {
+                v.execute_editing_command(c);
+            }
+        };
         match combo {
             "Ctrl+T" => self.nova_aba(),
             "Ctrl+U" => {
-                // O código-fonte da página (o próprio motor mostra o texto).
+                // O código-fonte da página numa aba nova.
                 let u = self.url_atual();
-                if !u.is_empty() && !u.starts_with("data:") {
-                    self.abrir(&format!("view-source:{u}"));
+                if let (Some(v), false) = (&b, u.is_empty() || u.starts_with("data:")) {
+                    if let Some(p) = motor::nova_aba("", None) {
+                        motor::codigo_fonte(v, p.clone());
+                        self.pôr_aba(p, false);
+                    }
                 }
             }
             "Ctrl+Shift+I" => self.ferramentas(),
@@ -556,8 +521,8 @@ impl Navegador {
             }
             "Ctrl+D" => self.alternar_favorito(),
             "Ctrl+P" => {
-                if let Some(h) = self.host() {
-                    motor::imprimir(&h, &self.dados);
+                if let Some(v) = &b {
+                    motor::imprimir(v, &self.dados);
                 }
             }
             "Ctrl+Shift+T" => self.reabrir_aba(),
@@ -575,7 +540,7 @@ impl Navegador {
             }
             "Ctrl+Shift+R" => {
                 if let Some(b) = &b {
-                    b.reload_ignore_cache();
+                    b.reload_bypass_cache();
                 }
             }
             "Alt+Left" => {
@@ -588,6 +553,12 @@ impl Navegador {
                     b.go_forward();
                 }
             }
+            "Escape" if self.achar.is_some() => {
+                self.achar = None;
+                if let Some(v) = &b {
+                    motor::buscar(v, "", false);
+                }
+            }
             "Alt+Home" => {
                 let i = self.pagina_inicial();
                 self.carregar(&i);
@@ -597,16 +568,16 @@ impl Navegador {
             "Ctrl+=" | "Ctrl++" | "Ctrl+Shift+=" | "Ctrl+plus" | "Ctrl+equal" => self.zoom(0.5),
             "Ctrl+-" | "Ctrl+minus" => self.zoom(-0.5),
             "Ctrl+0" => {
-                if let Some(h) = self.host() {
-                    h.set_zoom_level(self.aj.zoom);
+                if let Some(v) = &b {
+                    v.set_zoom_level(fator(self.aj.zoom));
                 }
             }
-            "Ctrl+C" if pagina => frame().map(|f| f.copy()).unwrap_or(()),
-            "Ctrl+X" if pagina => frame().map(|f| f.cut()).unwrap_or(()),
-            "Ctrl+V" if pagina => frame().map(|f| f.paste()).unwrap_or(()),
-            "Ctrl+A" if pagina => frame().map(|f| f.select_all()).unwrap_or(()),
-            "Ctrl+Z" if pagina => frame().map(|f| f.undo()).unwrap_or(()),
-            "Ctrl+Shift+Z" | "Ctrl+Y" if pagina => frame().map(|f| f.redo()).unwrap_or(()),
+            "Ctrl+C" if pagina => editar("Copy"),
+            "Ctrl+X" if pagina => editar("Cut"),
+            "Ctrl+V" if pagina => editar("Paste"),
+            "Ctrl+A" if pagina => editar("SelectAll"),
+            "Ctrl+Z" if pagina => editar("Undo"),
+            "Ctrl+Shift+Z" | "Ctrl+Y" if pagina => editar("Redo"),
             _ => return false,
         }
         true
@@ -644,9 +615,11 @@ impl Navegador {
         }
     }
 
+    /// O zoom em passos (os do Chrome: 1,2 vezes a cada dois passos de 0,5).
     fn zoom(&self, d: f64) {
-        if let Some(h) = self.host() {
-            h.set_zoom_level((h.zoom_level() + d).clamp(-4.0, 6.0));
+        if let Some(v) = self.view() {
+            let nivel = v.zoom_level().max(0.01).ln() / 1.2f64.ln();
+            v.set_zoom_level(fator((nivel + d).clamp(-4.0, 6.0)));
         }
     }
 
@@ -736,7 +709,6 @@ impl Navegador {
         {
             let site_ = escudos::site(&url);
             let web = url.starts_with("http");
-            let n = self.browser().map(|b| escudos::barrados(b.identifier())).unwrap_or(0);
             let r = Rect::new(dir - 28.0, by, 28.0, 26.0);
             let h = ui.hit(r);
             if h.hover && web {
@@ -745,17 +717,10 @@ impl Navegador {
             let ativo = web && escudos::valem(&site_);
             let cor = if ativo { ui.theme.accent } else { cor_glifo(ui, 0.35) };
             sem_troca(ui.c, |c| escudo(c, r.x + r.w / 2.0, r.y + r.h / 2.0, cor, ativo));
-            if ativo && n > 0 {
-                let t = if n > 99 { "99+".to_string() } else { n.to_string() };
-                let tw = ui.fonts.measure(&t, 8.5, true).max(7.0) + 5.0;
-                let (bx, byy) = (r.x + r.w - tw + 1.0, r.y + 1.0);
-                ui.c.fill(rrect(bx, byy, tw, 11.0, 5.5), &solid(rgba(230, 80, 30, 255)));
-                sem_troca(ui.c, |c| ui.fonts.draw(c, &t, bx + (tw - ui.fonts.measure(&t, 8.5, true)) / 2.0, byy + 8.5, 8.5, true, Color::WHITE));
-            }
             if h.clicked && web {
                 let mut itens = vec![
                     MenuItem::new("esc-site", &tr!("Escudos Ligados em {}", site_), "").checked(escudos::valem(&site_)).enabled(self.aj.bloqueador),
-                    MenuItem::new("esc-info", &tr!("{} anúncios e rastreadores barrados nesta página", n), "").enabled(false),
+                    MenuItem::new("esc-info", tr!("O motor barra os anúncios e rastreadores antes de carregarem"), "").enabled(false),
                     MenuItem::Separator,
                 ];
                 itens.push(MenuItem::new("esc-todos", tr!("Escudos em Todos os Sites"), "").checked(self.aj.bloqueador));
@@ -791,9 +756,6 @@ impl Navegador {
             }
         }
         if autofocus {
-            if let Some(h) = self.host() {
-                h.set_focus(0);
-            }
             // O campo começa vazio: digitar já troca o endereço; Esc devolve.
             self.barra.clear();
         }
@@ -806,9 +768,7 @@ impl Navegador {
             }
             if self.barra_foco && ui.keys().iter().any(|k| k.key == glove_ui::ui::Key::Escape) {
                 self.barra_foco = false;
-                if let Some(h) = self.host() {
-                    h.set_focus(1);
-                }
+                self.focar_pagina = true;
             }
             if enter || self.barra_foco {
                 self.teclas_da_barra = true;
@@ -901,20 +861,16 @@ impl Navegador {
             let cor = cor_glifo(ui, 0.8);
             sem_troca(ui.c, |c| glove_ui::paint::icons::glyph(c, if loading { Glyph::Stop } else { Glyph::RotateRight }, rr.x + 10.0, rr.y + 10.0, 11.0, cor));
             if h.clicked {
-                if let Some(b) = self.browser() {
-                    if loading { b.stop_load() } else { b.reload() }
+                if let Some(b) = self.view() {
+                    if loading { b.stop_loading() } else { b.reload() }
                 }
             }
         }
-        // Carregando: uma faixa azul fina embaixo do campo, como no Safari.
+        // Carregando: uma faixa azul fina embaixo do campo, do tamanho do que já chegou,
+        // como no Safari.
         if loading {
-            let t = (self.ativo.elapsed().as_millis() % 1200) as f32 / 1200.0;
-            let bw = fr.w * 0.3;
-            let x0 = (fr.x - bw + t * (fr.w + bw)).max(fr.x);
-            let x1 = (fr.x - bw + t * (fr.w + bw) + bw).min(fr.x + fr.w);
-            if x1 > x0 {
-                ui.c.fill_rect(x0, fr.y + fr.h - 2.0, x1 - x0, 2.0, &solid(ui.theme.accent));
-            }
+            let prog = self.aba().map(|a| a.p.borrow().progresso).unwrap_or(0.0).clamp(0.05, 1.0) as f32;
+            ui.c.fill_rect(fr.x + 4.0, fr.y + fr.h - 2.0, (fr.w - 8.0) * prog, 2.0, &solid(ui.theme.accent));
         }
         // O resto da barra arrasta a janela.
         ui.toolbar_drag(Rect::new(0.0, 0.0, w, BARRA_H));
@@ -1053,11 +1009,6 @@ impl Navegador {
         ui.c.hline(0.0, y + ACHAR_H - 1.0, w, rgba(180, 180, 186, 255));
         let fr = Rect::new(w - 420.0, y + 5.0, 220.0, 22.0);
         let foco = std::mem::take(&mut self.focar_achar);
-        if foco {
-            if let Some(h) = self.host() {
-                h.set_focus(0);
-            }
-        }
         let (mudou, enter) = ui.text_field_in(fr, &mut texto, foco);
         if ui.has_focus() {
             self.teclas_da_barra = true;
@@ -1077,199 +1028,102 @@ impl Navegador {
         let mut fechar = false;
         ui.area(Rect::new(w - 110.0, y + 4.0, 100.0, 24.0), |ui| fechar = ui.small_button(tr!("Concluído")));
         let esc = ui.keys().iter().any(|k| k.key == glove_ui::ui::Key::Escape);
-        if let Some(h) = self.host() {
+        if let Some(v) = self.view() {
+            let anda = |a: &Aba, d: i32| {
+                let mut p = a.p.borrow_mut();
+                let n = p.achados.1.max(1);
+                p.achados.0 = ((p.achados.0 - 1 + d).rem_euclid(n)) + 1;
+            };
             if mudou {
-                if texto.is_empty() {
-                    h.stop_finding(1);
-                } else {
-                    h.find(Some(&texto.as_str().into()), 1, 0, 0);
+                if let Some(a) = self.aba() {
+                    a.p.borrow_mut().achados = (0, 0);
                 }
+                motor::buscar(&v, &texto, false);
             } else if enter || anterior.is_some() {
                 let frente = anterior != Some(0) && !ui.mods().shift;
                 if !texto.is_empty() {
-                    h.find(Some(&texto.as_str().into()), frente as i32, 0, 1);
+                    motor::buscar(&v, &texto, !frente);
+                    if let Some(a) = self.aba() {
+                        anda(a, if frente { 1 } else { -1 });
+                    }
                 }
             }
             if fechar || esc {
-                h.stop_finding(1);
-                h.set_focus(1);
+                motor::buscar(&v, "", false);
+                self.focar_pagina = true;
             }
         }
         self.achar = if fechar || esc { None } else { Some(texto) };
         ACHAR_H
     }
 
-    /// Copia a imagem nova da página (se houver) para os canvas da aba.
+    /// Os ícones novos dos sites (refeitos em 16 pontos).
     fn atualizar_tela(&mut self) {
         let escala = self.escala;
-        let zoom = self.aj.zoom;
-        for (k, a) in self.abas.iter_mut().enumerate() {
+        for a in self.abas.iter_mut() {
             let mut p = a.p.borrow_mut();
-            // Endereço pedido antes de a aba ficar pronta.
-            if p.pendente.is_some() {
-                if let Some(f) = p.browser.as_ref().and_then(|b| b.main_frame()) {
-                    let u = p.pendente.take().unwrap_or_default();
-                    f.load_url(Some(&u.as_str().into()));
-                }
-            }
-            // O zoom padrão das Preferências, quando o motor já criou a aba.
-            if !a.zoom_ok {
-                if let Some(h) = p.browser.as_ref().and_then(|b| b.host()) {
-                    if zoom != 0.0 {
-                        h.set_zoom_level(zoom);
-                    }
-                    a.zoom_ok = true;
-                }
-            }
-            // O ícone do site (qualquer aba): refeito em 16 pontos.
             if std::mem::take(&mut p.favicon_novo) {
                 a.icone = p.favicon.as_ref().and_then(|(d, w, h)| icone_16(d, *w, *h, escala));
-            }
-            // Aba aberta por trás: o motor para de desenhá-la.
-            if k != self.atual && !a.oculta {
-                if let Some(h) = p.browser.as_ref().and_then(|b| b.host()) {
-                    h.was_hidden(1);
-                    a.oculta = true;
-                }
-            }
-            if k != self.atual || !p.dirty {
-                continue;
-            }
-            p.dirty = false;
-            // A imagem da página já vem pronta do motor (`p.tela`); a lista suspensa, aqui.
-            a.popup = None;
-            if p.popup.is_some() && p.pw > 0 && p.ph > 0 && p.popup_frame.len() == (p.pw * p.ph * 4) as usize {
-                if let Some(mut c) = Canvas::new(p.pw as f32 / escala, p.ph as f32 / escala, escala).filter(|c| c.px_width() == p.pw as u32 && c.px_height() == p.ph as u32) {
-                    c.pixels_mut().copy_from_slice(&p.popup_frame);
-                    a.popup = Some(c);
-                }
             }
         }
     }
 
-    /// O mouse e o teclado vão para a página (o que não é das barras).
-    fn entrada(&mut self, ui: &mut Ui, area: Rect) {
-        let Some(h) = self.host() else { return };
-        let (px, py) = ui.pointer();
-        // Sobre a lista de sugestões, o mouse não vai para a página (nem o soltar do clique
-        // que escolheu uma delas: a lista já sumiu, mas o botão ainda está descendo nela).
-        if self.na_sugestao {
-            if ui.mouse_released() || !ui.mouse_down() {
-                self.na_sugestao = false;
-            }
-            return;
-        }
-        if self.sugestao_area.is_some_and(|r| r.contains((px, py))) {
-            return;
-        }
-        let mods = ui.mods().clone();
-        let flags = (if mods.shift { 1 << 1 } else { 0 }) | (if mods.ctrl { 1 << 2 } else { 0 }) | (if mods.alt { 1 << 3 } else { 0 }) | (if ui.mouse_down() { 1 << 4 } else { 0 });
-        let ev = cef::MouseEvent { x: (px - area.x).round() as i32, y: (py - area.y).round() as i32, modifiers: flags };
-        let inside = ui.pointer_inside() && area.contains((px, py));
-        if inside {
-            // O cursor que a página pediu (mãozinha nos links, barra nos textos).
-            let c = self.aba().map(|a| a.p.borrow().cursor).unwrap_or_default();
-            ui.set_cursor(c);
-        }
-        if inside || self.apertado {
-            if ui.moved() {
-                h.send_mouse_move_event(Some(&ev), 0);
-                self.ativo = Instant::now();
-            }
-            self.dentro = true;
-        } else if self.dentro {
-            h.send_mouse_move_event(Some(&ev), 1);
-            self.dentro = false;
-        }
-        if inside && ui.mouse_pressed() {
-            h.set_focus(1);
-            self.barra_foco = false;
-            self.apertado = true;
-            h.send_mouse_click_event(Some(&ev), cef::MouseButtonType::LEFT, 0, ui.click_count().max(1) as i32);
-            self.ativo = Instant::now();
-        }
-        if self.apertado && ui.mouse_released() {
-            self.apertado = false;
-            h.send_mouse_click_event(Some(&ev), cef::MouseButtonType::LEFT, 1, ui.click_count().max(1) as i32);
-        }
-        if ui.right_clicked(area) {
-            h.set_focus(1);
-            h.send_mouse_click_event(Some(&ev), cef::MouseButtonType::RIGHT, 0, 1);
-            h.send_mouse_click_event(Some(&ev), cef::MouseButtonType::RIGHT, 1, 1);
-        }
-        // Botão do meio: o motor abre o link numa aba nova (e rola com ele, como no Chrome).
-        if let Some(desce) = ui.middle_button(area) {
-            h.send_mouse_click_event(Some(&ev), cef::MouseButtonType::MIDDLE, (!desce) as i32, 1);
-            self.ativo = Instant::now();
-        }
-        // A roda vem em pixels (para baixo = positivo); o motor quer o contrário e maior.
-        // Shift + roda e a roda de lado do touchpad rolam para os lados.
-        let (mut sx, mut sy) = (ui.scroll_x_in(area), ui.scroll_in(area));
-        if mods.shift && sx == 0.0 {
-            (sx, sy) = (sy, 0.0);
-        }
-        if sx != 0.0 || sy != 0.0 {
-            h.send_mouse_wheel_event(Some(&ev), (-sx * 4.0).round() as i32, (-sy * 4.0).round() as i32);
-            self.ativo = Instant::now();
-        }
-        // Teclado: com um campo da Jangada em foco, só os atalhos dela.
-        let keys = ui.keys().to_vec();
-        if self.barra_foco || std::mem::take(&mut self.teclas_da_barra) {
-            for k in keys {
-                if matches!(k.combo.as_str(), "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N" | "Ctrl+U" | "Ctrl+Shift+I") {
-                    self.atalho(&k.combo, false);
+    /// O que o motor deixou para a janela: abas novas, avisos, a impressão pronta.
+    fn processar(&mut self) {
+        let novas = motor::NOVAS_ABAS.with(|n| std::mem::take(&mut *n.borrow_mut()));
+        for (u, fundo, view) in novas {
+            match view {
+                Some(v) => {
+                    let p = motor::aba_criada(v, &u);
+                    self.pôr_aba(p, fundo);
                 }
+                None => self.abrir_em(&u, fundo),
             }
-            return;
         }
-        let mut handled_text = false;
-        for k in keys {
-            use glove_ui::ui::Key;
-            if self.atalho(&k.combo, true) {
-                handled_text = true;
-                continue;
-            }
-            let vk = match k.key {
-                Key::Backspace => 8,
-                Key::Tab => 9,
-                Key::Enter => 13,
-                Key::Escape => 27,
-                Key::PageUp => 33,
-                Key::PageDown => 34,
-                Key::End => 35,
-                Key::Home => 36,
-                Key::Left => 37,
-                Key::Up => 38,
-                Key::Right => 39,
-                Key::Down => 40,
-                Key::Delete => 46,
-                Key::Other => 0,
-            };
-            if vk == 0 {
-                continue;
-            }
-            let mut e = cef::KeyEvent { size: std::mem::size_of::<cef::sys::cef_key_event_t>(), type_: cef::KeyEventType::RAWKEYDOWN, modifiers: flags, windows_key_code: vk, ..Default::default() };
-            h.send_key_event(Some(&e));
-            if vk == 13 || vk == 9 || vk == 8 {
-                e.type_ = cef::KeyEventType::CHAR;
-                e.character = if vk == 8 { 8 } else if vk == 9 { 9 } else { 13 };
-                e.unmodified_character = e.character;
-                h.send_key_event(Some(&e));
-            }
-            e.type_ = cef::KeyEventType::KEYUP;
-            h.send_key_event(Some(&e));
-            self.ativo = Instant::now();
+        if let Some(a) = motor::AVISOS.with(|a| a.borrow_mut().pop()) {
+            self.aviso = Some((a, Instant::now()));
         }
-        if !handled_text {
-            let text = ui.typed().to_string();
-            for ch in text.chars().filter(|c| !c.is_control()) {
-                let mut buf = [0u16; 2];
-                for u in ch.encode_utf16(&mut buf).iter() {
-                    let e = cef::KeyEvent { size: std::mem::size_of::<cef::sys::cef_key_event_t>(), type_: cef::KeyEventType::CHAR, modifiers: flags & !(1 << 4), windows_key_code: *u as i32, character: *u, unmodified_character: *u, ..Default::default() };
-                    h.send_key_event(Some(&e));
-                }
-                self.ativo = Instant::now();
+        // A página virou PDF: a folha Imprimir.
+        if let Some(pdf) = motor::IMPRIMIR.with(|i| i.borrow_mut().take()) {
+            let nome = self.titulo_atual();
+            self.imprimir = Some(glove_ui::print::PrintSheet::new(if nome.is_empty() { "Jangada" } else { &nome }, glove_ui::print::PrintContent::Pdf(pdf)));
+        }
+    }
+
+    /// A página da aba atual na janela (no lugar `area`); as outras abas ficam escondidas
+    /// (o motor para de desenhá-las).
+    fn pôr_pagina(&mut self, area: Rect) {
+        let Some(host) = self.host.clone() else { return };
+        let atual = self.view();
+        if self.a_vista != atual {
+            if let Some(v) = &self.a_vista {
+                v.set_visible(false);
             }
+            if let Some(v) = &atual {
+                v.set_visible(true);
+            }
+            self.a_vista = atual.clone();
+            self.focar_pagina = true;
+        }
+        for a in &self.abas {
+            let v = a.p.borrow().view.clone();
+            if Some(&v) != atual.as_ref() && v.is_visible() {
+                v.set_visible(false);
+            }
+            if v.parent().is_none() || Some(&v) == atual.as_ref() {
+                host.place(&v, area.x, area.y, area.w, area.h);
+            }
+        }
+    }
+
+    /// As teclas que chegaram ao kit (o teclado nas barras da Jangada, ou um item da
+    /// barra de menu): os atalhos da Jangada. Com o teclado na página, os atalhos chegam
+    /// por `native_key` (antes de a página recebê-los).
+    fn teclas(&mut self, ui: &mut Ui) {
+        // Num campo da Jangada (endereço, busca), copiar e colar são do campo.
+        let pagina = !ui.has_focus();
+        for k in ui.keys().to_vec() {
+            self.atalho(&k.combo, pagina);
         }
     }
 
@@ -1308,14 +1162,22 @@ impl Navegador {
         itens.push(MenuItem::new("ctx-recarregar", tr!("Recarregar"), ""));
         itens.push(MenuItem::Separator);
         itens.push(MenuItem::new("ctx-pdf", tr!("Salvar Página como PDF"), ""));
+        if self.aj.ferramentas_dev {
+            itens.push(MenuItem::Separator);
+            itens.push(MenuItem::new("ctx-inspecionar", tr!("Inspecionar Elemento"), ""));
+        }
         self.ctx_dados = Some(c.clone());
         ui.context_menu((area.x + c.x as f32, area.y + c.y as f32), &itens);
     }
 
     fn acao_contexto(&mut self, id: &str) {
         let Some(c) = self.ctx_dados.clone() else { return };
-        let b = self.browser();
-        let frame = || b.as_ref().and_then(|b| b.focused_frame().or_else(|| b.main_frame()));
+        let b = self.view();
+        let editar = |cmd: &str| {
+            if let Some(v) = &b {
+                v.execute_editing_command(cmd);
+            }
+        };
         match id {
             "ctx-link-aba" => self.abrir(&c.link),
             "ctx-img-aba" => self.abrir(&c.image),
@@ -1327,9 +1189,10 @@ impl Navegador {
                     self.aviso = Some((tr!("Adicionada aos Favoritos.").into(), Instant::now()));
                 }
             }
-            "ctx-recortar" => frame().map(|f| f.cut()).unwrap_or(()),
-            "ctx-copiar" => frame().map(|f| f.copy()).unwrap_or(()),
-            "ctx-colar" => frame().map(|f| f.paste()).unwrap_or(()),
+            "ctx-recortar" => editar("Cut"),
+            "ctx-copiar" => editar("Copy"),
+            "ctx-colar" => editar("Paste"),
+            "ctx-inspecionar" => self.ferramentas(),
             "ctx-buscar" => {
                 let u = format!("{}{}", self.aj.busca_url(), codificar(&c.selection));
                 self.abrir(&u);
@@ -1401,8 +1264,8 @@ impl Navegador {
                     self.mudou = true;
                 }
                 "pdf" => {
-                    if let Some(h) = self.host() {
-                        motor::salvar_pdf(&h, &self.titulo_atual());
+                    if let Some(v) = self.view() {
+                        motor::salvar_pdf(&v, &self.titulo_atual());
                     }
                 }
                 "limpar-historico" => {
@@ -1424,12 +1287,12 @@ impl Navegador {
             if url.starts_with("data:") || url.is_empty() {
                 continue;
             }
-            let dado = inicio::pagina_erro(fonts, escuro, &url, &codigo);
-            a.p.borrow_mut().erro_url = Some(url);
-            let b = a.p.borrow().browser.clone();
-            if let Some(f) = b.and_then(|b| b.main_frame()) {
-                f.load_url(Some(&dado.as_str().into()));
-            }
+            // No lugar do endereço que falhou (a barra continua com ele; Tentar de Novo
+            // recarrega).
+            let html = inicio::html_erro(fonts, escuro, &url, &codigo);
+            let v = a.p.borrow().view.clone();
+            a.p.borrow_mut().erro_alt = true;
+            v.load_alternate_html(&html, &url, None);
         }
     }
 
@@ -1618,12 +1481,9 @@ impl Navegador {
             let _ = std::process::Command::new("glove-files").arg(&alvo).spawn().or_else(|_| std::process::Command::new("xdg-open").arg(&alvo).spawn());
         }
         if cancelar {
-            motor::DOWNLOADS.with(|l| {
-                if let Some(cb) = idx.and_then(|i| l.borrow().get(i).and_then(|d| d.cb.clone())) {
-                    use cef::ImplDownloadItemCallback;
-                    cb.cancel();
-                }
-            });
+            if let Some(id) = idx.and_then(|i| motor::DOWNLOADS.with(|l| l.borrow().get(i).map(|d| d.id))) {
+                motor::cancelar_download(id);
+            }
         }
         if limpar {
             motor::DOWNLOADS.with(|l| l.borrow_mut().retain(|d| !d.pronto && !d.cancelado));
@@ -1682,8 +1542,8 @@ impl Navegador {
                 let mut z = ZOOMS.iter().position(|p| (nivel(*p) - self.aj.zoom).abs() < 0.05).unwrap_or(3);
                 if ui.popup(&mut z, &nomes, 120.0) {
                     self.aj.zoom = nivel(ZOOMS[z]);
-                    for a in &mut self.abas {
-                        a.zoom_ok = false;
+                    for a in &self.abas {
+                        a.p.borrow().view.set_zoom_level(fator(self.aj.zoom));
                     }
                 }
                 ui.space(12.0);
@@ -1921,8 +1781,8 @@ impl Navegador {
                 ui.checkbox(&mut self.aj.placa_de_video, tr!("Usar a placa de vídeo (vale ao reabrir a Jangada)"));
                 ui.paragraph(tr!("Sem ela a Jangada gasta menos memória; com ela, vídeos e jogos ficam mais leves para o processador."));
                 ui.space(6.0);
-                ui.checkbox(&mut self.aj.ferramentas_dev, tr!("Ferramentas do Desenvolvedor (vale ao reabrir a Jangada)"));
-                ui.paragraph(tr!("Visualizar ▸ Ferramentas do Desenvolvedor (Ctrl+Shift+I) abre o inspetor da aba. Fica aberta uma porta local de depuração: outros programas deste computador podem controlar o navegador por ela. Deixe desligado se não for usar."));
+                ui.checkbox(&mut self.aj.ferramentas_dev, tr!("Mostrar \"Inspecionar Elemento\" no menu das páginas"));
+                ui.paragraph(tr!("Visualizar ▸ Ferramentas do Desenvolvedor (Ctrl+Shift+I) abre o inspetor da aba numa janela ao lado. Nada fica aberto para outros programas."));
                 ui.space(14.0);
                 ui.label_ex(tr!("Downloads"), 12.0, true, tinta());
                 let pasta = pasta_downloads();
@@ -1980,9 +1840,7 @@ impl Navegador {
             },
             2 => match ui.alert(glove_ui::AlertKind::Caution, tr!("Apagar os cookies e os dados dos sites?"), tr!("Você sai das contas em que entrou nos sites."), &[tr!("Cancelar"), tr!("Apagar")]) {
                 Some(1) => {
-                    if let Some(m) = cef::cookie_manager_get_global_manager(None) {
-                        m.delete_cookies(None, None, None);
-                    }
+                    motor::apagar_dados();
                     self.aviso = Some((tr!("Cookies apagados.").into(), Instant::now()));
                     self.pergunta = 0;
                 }
@@ -1992,7 +1850,10 @@ impl Navegador {
             _ => {}
         }
         if self.aj != antes {
-            let reabrir = self.aj.placa_de_video != antes.placa_de_video || self.aj.escuro_nas_paginas != antes.escuro_nas_paginas || self.aj.ferramentas_dev != antes.ferramentas_dev;
+            let reabrir = self.aj.placa_de_video != antes.placa_de_video || self.aj.escuro_nas_paginas != antes.escuro_nas_paginas;
+            if self.aj.ferramentas_dev != antes.ferramentas_dev {
+                motor::ferramentas_dev(self.aj.ferramentas_dev);
+            }
             self.reabrir |= reabrir;
             if self.aj.busca != antes.busca || self.aj.inicio_fundo != antes.inicio_fundo || self.aj.inicio_atalhos != antes.inicio_atalhos || self.aj.inicio_busca != antes.inicio_busca {
                 self.refazer_inicio(ui.fonts);
@@ -2155,76 +2016,30 @@ fn copiar_texto(t: &str) {
 }
 
 impl App for Navegador {
-    fn tick(&self) -> Option<Duration> {
-        // O motor pede quando quer trabalhar: atende na hora (rolando a página, cada passo
-        // — o evento, a página, o quadro — esperava o próximo tique de 16 ms, fora do
-        // compasso da tela, e a rolagem dava trancos). Sem pedido, a batida de sempre.
-        let pedido = motor::BOMBA.load(std::sync::atomic::Ordering::Relaxed);
-        let mexendo = self.ativo.elapsed() < Duration::from_secs(2) || self.abas.iter().any(|a| a.p.borrow().loading);
-        let teto = if mexendo { 16 } else { 120 };
-        let ms = if pedido < 0 { teto } else { (pedido as u64).clamp(1, teto) };
-        Some(Duration::from_millis(ms))
+    /// O segundo `jangada` manda os endereços pelo socket: a Jangada acorda quando chega
+    /// alguém (nada fica rodando de fundo esperando).
+    fn watch_fd(&self) -> Option<std::os::fd::RawFd> {
+        use std::os::fd::AsRawFd;
+        self.servidor.as_ref().map(|l| l.as_raw_fd())
     }
 
-    fn on_tick(&mut self) {
-        // O pedido foi atendido; o motor avisa de novo (durante o trabalho) se quiser mais.
-        motor::BOMBA.store(-1, std::sync::atomic::Ordering::Relaxed);
-        cef::do_message_loop_work();
-        if let Some(rx) = &self.dev_rx {
-            match rx.try_recv() {
-                Ok(r) => {
-                    self.dev_rx = None;
-                    match r {
-                        Ok(u) => self.abrir(&u),
-                        Err(e) => self.aviso = Some((e, Instant::now())),
-                    }
-                    self.mudou = true;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                Err(_) => self.dev_rx = None,
-            }
-        }
-        let novas = motor::NOVAS_ABAS.with(|n| std::mem::take(&mut *n.borrow_mut()));
-        for (u, fundo) in novas {
-            self.abrir_em(&u, fundo);
-            self.mudou = true;
-        }
-        if let Some(a) = motor::AVISOS.with(|a| a.borrow_mut().pop()) {
-            self.aviso = Some((a, Instant::now()));
-            self.mudou = true;
-        }
-        // A página virou PDF: a folha Imprimir.
-        if let Some(pdf) = motor::IMPRIMIR.with(|i| i.borrow_mut().take()) {
-            let nome = self.titulo_atual();
-            self.imprimir = Some(glove_ui::print::PrintSheet::new(if nome.is_empty() { "Jangada" } else { &nome }, glove_ui::print::PrintContent::Pdf(pdf)));
-            self.mudou = true;
-        }
-        let n = self.abas.len();
+    fn fd_ready_on(&mut self, _fd: std::os::fd::RawFd) -> bool {
         self.ler_servidor();
-        self.mudou |= n != self.abas.len();
+        self.mudou = true;
+        true
     }
 
-    /// Só redesenha quando algo das abas mudou (imagem nova, título, endereço, cursor…):
-    /// a batida do motor é rápida e refazer a janela à toa pesa.
-    fn tick_redraw(&mut self) -> bool {
-        use std::hash::{Hash, Hasher};
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.atual.hash(&mut h);
-        self.abas.len().hash(&mut h);
-        let mut carregando = false;
-        for a in &self.abas {
-            let p = a.p.borrow();
-            (p.versao, p.dirty, &p.title, &p.url, p.loading, p.back, p.forward, &p.status, p.favicon_novo, p.achados).hash(&mut h);
-            (p.ctx.is_some(), p.dialog.is_some(), p.erro_pedido.is_some(), p.pendente.is_some(), p.popup.is_some(), p.cursor as u8).hash(&mut h);
-            carregando |= p.loading;
+    /// Com o teclado na página: os atalhos da Jangada vêm antes (copiar, colar e o resto
+    /// ficam com a página).
+    fn native_key(&mut self, combo: &str) -> bool {
+        let da_jangada = matches!(
+            combo,
+            "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+Shift+R" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N" | "Ctrl+U" | "Ctrl+Shift+I" | "Ctrl+L" | "F6" | "Ctrl+F" | "Ctrl+D" | "Ctrl+Shift+B" | "Alt+Left" | "Alt+Right" | "Alt+Home" | "Ctrl+=" | "Ctrl++" | "Ctrl+Shift+=" | "Ctrl+plus" | "Ctrl+equal" | "Ctrl+-" | "Ctrl+minus" | "Ctrl+0"
+        ) || (combo == "Escape" && self.achar.is_some());
+        if da_jangada {
+            self.atalho(combo, false);
         }
-        // O aviso de baixo some sozinho depois de 5 s.
-        self.aviso.as_ref().map(|(_, t)| t.elapsed() < Duration::from_secs(5)).hash(&mut h);
-        let assinatura = h.finish();
-        let downloads = motor::DOWNLOADS_MUDOU.with(|m| m.replace(false)) || senhas::PARA_GUARDAR.with(|p| !p.borrow().is_empty()) || motor::PERMISSOES.with(|p| !p.borrow().is_empty()) || self.imp_job.is_some();
-        let mudou = std::mem::take(&mut self.mudou) || self.imp_abrir || self.hist_abrir || self.down_abrir || downloads || assinatura != self.assinatura || carregando;
-        self.assinatura = assinatura;
-        mudou
+        da_jangada
     }
 
     fn close_window(&mut self, id: u32) -> bool {
@@ -2234,19 +2049,9 @@ impl App for Navegador {
         self.close_requested()
     }
 
-    fn window_closed(&mut self, id: u32) {
-        let _ = id;
-    }
-
     fn close_requested(&mut self) -> bool {
         // As abas da última vez (para "reabrir as abas").
         self.gravar_sessao();
-        for a in &self.abas {
-            let b = a.p.borrow().browser.clone();
-            if let Some(h) = b.and_then(|b| b.host()) {
-                h.close_browser(1);
-            }
-        }
         true
     }
 
@@ -2349,6 +2154,14 @@ impl App for Navegador {
         self.escala = ui.c.scale;
         self.escuro = ui.theme.dark;
         self.teclas_da_barra = false;
+        if self.host.is_none() {
+            self.host = ui.native_host();
+        }
+        self.processar();
+        // O teclado foi para a página (um clique nela): o campo de endereço larga.
+        if ui.native_focus() {
+            self.barra_foco = false;
+        }
         for a in ui.menu_actions().to_vec() {
             match a.as_str() {
                 "preferencias" => self.prefs = true,
@@ -2392,57 +2205,36 @@ impl App for Navegador {
             self.gravar_sessao();
         }
         let (w, h) = (ui.c.w, ui.c.h);
-        ui.c.fill_rect(0.0, 0.0, w, h, &solid(Color::WHITE));
         // Com a folha Imprimir aberta, as barras não respondem (a folha é da janela).
         ui.set_enabled(self.imprimir.is_none());
-        self.barra(ui);
         self.atualizar_tela();
-        let mut top = BARRA_H;
-        top += self.faixa_abas(ui, top);
-        if top == BARRA_H {
-            ui.c.hline(0.0, BARRA_H - 1.0, w, rgba(170, 170, 176, 255));
+        // Um vídeo em tela cheia: só a página.
+        let cheia = self.aba().is_some_and(|a| a.p.borrow().tela_cheia);
+        let mut top = 0.0;
+        if !cheia {
+            self.barra(ui);
+            top = BARRA_H;
+            top += self.faixa_abas(ui, top);
+            if top == BARRA_H {
+                ui.c.hline(0.0, BARRA_H - 1.0, w, rgba(170, 170, 176, 255));
+            }
+            top += self.barra_favoritos(ui, top);
+            top += self.barra_achar(ui, top);
         }
-        top += self.barra_favoritos(ui, top);
-        top += self.barra_achar(ui, top);
-        let status = self.aviso.as_ref().filter(|(_, t)| t.elapsed() < Duration::from_secs(5)).map(|(m, _)| m.clone()).or_else(|| {
+        let aviso = self.aviso.as_ref().map(|(_, t)| t.elapsed()).filter(|d| *d < Duration::from_secs(5));
+        if let Some(d) = aviso {
+            // O aviso some sozinho.
+            ui.wake_after(Duration::from_secs(5) - d + Duration::from_millis(20));
+        }
+        let status = self.aviso.as_ref().filter(|_| aviso.is_some()).map(|(m, _)| m.clone()).or_else(|| {
             self.aba().map(|a| a.p.borrow().status.clone()).filter(|s| !s.is_empty())
         });
         let area = Rect::new(0.0, top, w, (h - top).max(1.0));
-        // O tamanho da página acompanha a janela.
-        if (area.w, area.h) != (self.area.w, self.area.h) || self.aba().is_some_and(|a| a.p.borrow().scale != self.escala) {
-            for a in &self.abas {
-                let mut p = a.p.borrow_mut();
-                p.w = area.w as i32;
-                p.h = area.h as i32;
-                p.scale = self.escala;
-            }
-            self.area = area;
-            for a in &self.abas {
-                let b = a.p.borrow().browser.clone();
-                if let Some(hh) = b.and_then(|b| b.host()) {
-                    hh.notify_screen_info_changed();
-                    hh.was_resized();
-                }
-            }
-        }
+        // A página: o widget do motor, embaixo do desenho da Jangada (aqui o desenho fica
+        // transparente: aparece a página, que recebe o mouse e o teclado direto).
         self.area = area;
-        if let Some(a) = self.aba() {
-            {
-                // A página: copiada só quando chega imagem nova (a versão muda).
-                let p = a.p.borrow();
-                if let Some(c) = &p.tela {
-                    let aba = (Rc::as_ptr(&a.p) as u64).rotate_left(17);
-                    for (i, v) in p.faixas.iter().enumerate() {
-                        let y0 = i as i32 * motor::FAIXA;
-                        ui.c.draw_opaque_rows(c, area.x, area.y, (y0, y0 + motor::FAIXA), v ^ aba);
-                    }
-                }
-            }
-            let pop = a.p.borrow().popup.clone();
-            if let (Some(c), Some(r)) = (&a.popup, pop) {
-                ui.c.draw_canvas(c, area.x + r.x as f32, area.y + r.y as f32);
-            }
-        }
+        ui.c.clear_rect(area.x, area.y, area.w, area.h);
+        self.pôr_pagina(area);
         // O link sob o mouse (ou um aviso), num balãozinho no canto de baixo.
         if let Some(t) = status {
             let t = ui.fonts.ellipsize(&mostrar(&t), 11.0, false, w * 0.6);
@@ -2476,17 +2268,10 @@ impl App for Navegador {
                         ajustes::gravar_permissao(&origem, n, permitir);
                     }
                 }
-                match pedido {
-                    motor::Permissao::Midia(cb, bits) => {
-                        if permitir {
-                            cb.cont(bits);
-                        } else {
-                            cb.cancel();
-                        }
-                    }
-                    motor::Permissao::Aviso(cb) => {
-                        cb.cont(if permitir { cef::PermissionRequestResult::ACCEPT } else { cef::PermissionRequestResult::DENY });
-                    }
+                if permitir {
+                    pedido.0.allow();
+                } else {
+                    pedido.0.deny();
                 }
             }
         } else if let (Some((origem, usuario, senha)), None) = (guardar, &dialog) {
@@ -2513,13 +2298,17 @@ impl App for Navegador {
             let botoes: Vec<&str> = if confirm { vec![tr!("Cancelar"), tr!("OK")] } else { vec![tr!("OK")] };
             let url = site(&self.url_atual());
             if let Some(i) = ui.alert(glove_ui::AlertKind::Note, &tr!("A página {} diz:", url), &msg, &botoes) {
-                cb.cont(if confirm { (i == 1) as i32 } else { 1 }, None);
+                if confirm {
+                    cb.confirm_set_confirmed(i == 1);
+                }
+                cb.close();
                 if let Some(a) = self.aba() {
                     a.p.borrow_mut().dialog = None;
                 }
             }
         } else if self.sobre {
-            let texto = tr!("O navegador do Glove OS. Motor: Chromium {} (CEF). Leve: a placa de vídeo desenha as páginas e nada fica rodando de fundo.", cef::sys::CHROME_VERSION_MAJOR);
+            let motor_v = format!("{}.{}.{}", webkit6::functions::major_version(), webkit6::functions::minor_version(), webkit6::functions::micro_version());
+            let texto = tr!("O navegador do Glove OS. Motor: WebKitGTK {}, o do sistema (as correções de segurança chegam pelas atualizações da distribuição). Leve: a placa de vídeo desenha as páginas e nada fica rodando de fundo.", motor_v);
             if ui.alert(glove_ui::AlertKind::Note, &format!("Jangada {VERSAO}"), &texto, &[tr!("OK")]).is_some() {
                 self.sobre = false;
             }
@@ -2556,10 +2345,15 @@ impl App for Navegador {
                 ui.fonts.draw(ui.c, &t, linha.x + 8.0, linha.y + 16.0, 12.0, false, cor);
             }
         }
-        // O mouse vai sempre para a página (passar sobre ela, a mãozinha nos links); o
-        // teclado só quando nenhum campo da Jangada está em foco (ver `entrada`).
-        self.entrada(ui, area);
+        // Os atalhos que chegaram ao kit; o menu de contexto que a página pediu.
+        self.teclas(ui);
         self.menu_contexto(ui, area);
+        // A página fica com o teclado (depois de navegar, trocar de aba, fechar a busca).
+        if std::mem::take(&mut self.focar_pagina) && !self.barra_foco && !ui.has_focus() {
+            if let Some(v) = self.view() {
+                v.grab_focus();
+            }
+        }
     }
 }
 
@@ -2629,31 +2423,6 @@ fn gerar_icones(dir: &std::path::Path) -> std::process::ExitCode {
     0.into()
 }
 
-/// O endereço do inspetor ligado à página `url` (a de título `titulo`, se houver mais de
-/// uma com o mesmo endereço), pela porta local de depuração.
-fn inspetor_de(porta: u16, url: &str, titulo: &str) -> Result<String, String> {
-    let falha = || tr!("Não deu para abrir as Ferramentas do Desenvolvedor.").to_string();
-    let mut c = std::net::TcpStream::connect(("127.0.0.1", porta)).map_err(|_| falha())?;
-    let _ = c.set_read_timeout(Some(Duration::from_secs(5)));
-    c.write_all(format!("GET /json/list HTTP/1.1\r\nHost: 127.0.0.1:{porta}\r\nConnection: close\r\n\r\n").as_bytes()).map_err(|_| falha())?;
-    let mut resp = String::new();
-    let _ = c.read_to_string(&mut resp);
-    let corpo = resp.split_once("\r\n\r\n").map(|(_, b)| b).ok_or_else(falha)?;
-    let lista: Vec<serde_json::Value> = serde_json::from_str(corpo).map_err(|_| falha())?;
-    let id = escolher_pagina(&lista, url, titulo).ok_or_else(|| tr!("Esta aba não tem uma página para inspecionar.").to_string())?;
-    Ok(format!("devtools://devtools/bundled/inspector.html?ws=127.0.0.1:{porta}/devtools/page/{id}"))
-}
-
-/// Na lista de páginas do motor, o id da aba: mesmo endereço (e, se houver várias, o mesmo
-/// título). Os próprios inspetores ficam de fora.
-fn escolher_pagina(lista: &[serde_json::Value], url: &str, titulo: &str) -> Option<String> {
-    let campo = |p: &serde_json::Value, k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let paginas: Vec<&serde_json::Value> = lista.iter().filter(|p| campo(p, "type") == "page" && !campo(p, "url").starts_with("devtools://")).collect();
-    let mesmo: Vec<&&serde_json::Value> = paginas.iter().filter(|p| campo(p, "url") == url).collect();
-    let p = mesmo.iter().find(|p| campo(p, "title") == titulo).or(mesmo.first())?;
-    Some(campo(p, "id")).filter(|i| !i.is_empty())
-}
-
 /// A porta pedida com `--depurar [PORTA]` (padrão 9222), ou None sem a opção.
 fn porta_depuracao() -> Option<u16> {
     let args: Vec<String> = std::env::args().collect();
@@ -2706,15 +2475,13 @@ fn main() -> std::process::ExitCode {
         }
         _ => {}
     }
-    let _ = cef::api_hash(cef::sys::CEF_API_VERSION_LAST, 0);
-    let args = cef::args::Args::new();
-    let Some(cmd) = args.as_cmd_line() else { return 1.into() };
-    let is_browser = cmd.has_switch(Some(&cef::CefString::from("type"))) != 1;
-    let mut app = motor::app();
-    let ret = cef::execute_process(Some(args.as_main_args()), Some(&mut app), std::ptr::null_mut());
-    if !is_browser {
-        // Processo da página, da rede etc.: o motor já fez o trabalho dele.
-        return (ret.max(0) as u8).into();
+    // A porta de depuração (`--depurar [PORTA]`): o inspetor do motor fica aberto em
+    // http://127.0.0.1:PORTA para outro navegador (só neste computador).
+    let pedida = porta_depuracao();
+    if let Some(p) = pedida {
+        // Segurança: ainda não há outras linhas de execução (o motor não subiu).
+        unsafe { std::env::set_var("WEBKIT_INSPECTOR_HTTP_SERVER", format!("127.0.0.1:{p}")) };
+        eprintln!("jangada: depuração em http://127.0.0.1:{p} (só neste computador)");
     }
     let aj = Ajustes::carregar();
     aj.aplicar();
@@ -2727,7 +2494,6 @@ fn main() -> std::process::ExitCode {
         None => "https://duckduckgo.com/".to_string(),
     };
     // Endereços pedidos (o resto da linha de comando que não é opção).
-    let pedida = porta_depuracao();
     let urls: Vec<String> = enderecos_da_linha().into_iter().map(|a| endereco(&a, &inicio_url, aj.busca_url())).collect();
     // Já aberta: manda os endereços para ela e sai.
     // A janela privada é outra janela: não manda os endereços para a normal e não a substitui.
@@ -2745,22 +2511,6 @@ fn main() -> std::process::ExitCode {
         }
         let _ = std::fs::remove_file(&sock);
     }
-    // A pasta temporária da janela privada (na memória, apagada ao fechar).
-    let tmp_privada = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join(format!("jangada-privada-{}", std::process::id()));
-    if privada {
-        // As pastas de janelas privadas que caíram (sem fechar direito) saem agora.
-        if let Some(base) = tmp_privada.parent() {
-            for e in std::fs::read_dir(base).into_iter().flatten().flatten() {
-                let nome = e.file_name().to_string_lossy().to_string();
-                if let Some(pid) = nome.strip_prefix("jangada-privada-").and_then(|n| n.parse::<u32>().ok()) {
-                    if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
-                        let _ = std::fs::remove_dir_all(e.path());
-                    }
-                }
-            }
-        }
-        let _ = std::fs::create_dir_all(&tmp_privada);
-    }
     let servidor = if privada {
         None
     } else {
@@ -2768,49 +2518,15 @@ fn main() -> std::process::ExitCode {
             let _ = l.set_nonblocking(true);
         })
     };
-
-    // A porta de depuração: a pedida, ou uma livre ao acaso com as Ferramentas do
-    // Desenvolvedor ligadas nas Preferências.
-    let depurar: Option<u16> = pedida.or_else(|| {
-        // (A janela privada não abre a porta só pela preferência: só com --depurar.)
-        (aj.ferramentas_dev && !privada).then(|| std::net::TcpListener::bind(("127.0.0.1", 0)).ok().and_then(|l| l.local_addr().ok()).map(|a| a.port())).flatten()
-    });
-    motor::DEPURACAO.store(depurar.unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
-    let perfil = dados.join("Perfil");
-    let idioma = if glove_config::idioma().starts_with("en") { "en-US" } else { "pt-BR" };
-    // Os sites veem a Jangada como um Chrome comum: com um nome a mais no fim, o Google
-    // recusa iniciar a sessão ("este navegador pode não ser seguro") e alguns sites
-    // tratam a página como de um navegador desconhecido.
-    let produto = format!("Chrome/{}.0.0.0", cef::sys::CHROME_VERSION_MAJOR);
-    let settings = cef::Settings {
-        windowless_rendering_enabled: 1,
-        external_message_pump: 1,
-        no_sandbox: (std::env::var_os("JANGADA_SEM_SANDBOX").is_some()) as i32,
-        // Privada: a pasta do motor fica no tmpfs (XDG_RUNTIME_DIR, na memória) e é apagada ao
-        // fechar; o perfil não tem caminho nenhum (cookies e senhas só na memória).
-        root_cache_path: if privada { tmp_privada.to_string_lossy().as_ref().into() } else { dados.to_string_lossy().as_ref().into() },
-        cache_path: if privada { "".into() } else { perfil.to_string_lossy().as_ref().into() },
-        log_file: if privada { tmp_privada.join("motor.log").to_string_lossy().as_ref().into() } else { "".into() },
-        persist_session_cookies: 1,
-        locale: idioma.into(),
-        accept_language_list: if idioma == "pt-BR" { "pt-BR,pt,en-US,en".into() } else { "en-US,en".into() },
-        user_agent_product: produto.as_str().into(),
-        log_severity: cef::LogSeverity::ERROR,
-        background_color: 0xffff_ffff,
-        // Só com --depurar: a porta de depuração do Chromium (127.0.0.1), para as
-        // ferramentas de desenvolvedor de outro navegador (chrome://inspect ou
-        // http://127.0.0.1:PORTA/json).
-        remote_debugging_port: depurar.map(i32::from).unwrap_or(0),
-        ..Default::default()
-    };
-    if let Some(p) = pedida {
-        eprintln!("jangada: depuração em http://127.0.0.1:{p} (só neste computador; quem a alcança controla o navegador)");
-    }
-    if cef::initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()) != 1 {
-        eprintln!("jangada: o motor do Chromium não iniciou");
+    // O GTK antes do motor (as abas são widgets dele).
+    glib::set_prgname(Some("glove.Navegador"));
+    if glove_ui::gtk::init().is_err() {
+        eprintln!("jangada: sem tela (o GTK não abriu)");
         return 1.into();
     }
-    // Os escudos sobem numa linha à parte (o motor guardado abre na hora).
+    // Privada: a sessão do motor fica só na memória (cookies, cache, senhas digitadas).
+    motor::iniciar(privada, &dados, &aj);
+    // Os escudos (os filtros já compilados abrem na hora).
     escudos::iniciar();
     // As abas da última vez: reabertas já (Preferências) ou guardadas para o menu Histórico.
     let fundo_imagem = aj.inicio_fundo.strip_prefix("imagem:").unwrap_or("").to_string();
@@ -2824,8 +2540,6 @@ fn main() -> std::process::ExitCode {
         focar_barra: false,
         area: Rect::new(0.0, BARRA_H, 1100.0, 700.0),
         escala: 1.0,
-        dentro: false,
-        apertado: false,
         na_sugestao: false,
         aviso: None,
         servidor,
@@ -2872,7 +2586,9 @@ fn main() -> std::process::ExitCode {
         ext_rx: None,
         ext_confirmar: None,
         ext_msg: None,
-        dev_rx: None,
+        host: None,
+        a_vista: None,
+        focar_pagina: false,
         senhas_lista: None,
         senhas_sel: None,
         senhas_tabela: TableState::default(),
@@ -2901,17 +2617,8 @@ fn main() -> std::process::ExitCode {
     glove_ui::use_own_frame_main();
     let opts = WindowOptions { title: "Jangada".into(), app_id: "glove.Navegador".into(), size: (1100, 760), fixed: false, min_size: Some((560, 380)) };
     let r = run(opts, nav);
-    // Fecha o motor com calma (as abas já pediram para fechar).
-    let t = Instant::now();
-    while t.elapsed() < Duration::from_millis(300) {
-        cef::do_message_loop_work();
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    cef::shutdown();
     if !privada {
         let _ = std::fs::remove_file(&sock);
-    } else {
-        let _ = std::fs::remove_dir_all(&tmp_privada);
     }
     if r.is_err() { 1.into() } else { 0.into() }
 }
