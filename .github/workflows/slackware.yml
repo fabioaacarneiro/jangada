@@ -7,6 +7,9 @@ name: Slackware
 on:
   push:
     tags: ["v*"]
+    # Uma correção na receita do Slackware refaz o pacote da versão atual (a do Cargo.toml).
+    branches: [master]
+    paths: ["ci/motor-slackware.sh", "ci/slackware.sh", "empacotar-slackware.sh", ".github/workflows/slackware.yml"]
   workflow_dispatch:
     inputs:
       tag:
@@ -21,9 +24,14 @@ jobs:
     name: slackware (-current)
     runs-on: ubuntu-latest
     timeout-minutes: 350
-    env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
+      - name: A release que recebe o pacote
+        run: |
+          if [ -n "${{ github.event.inputs.tag }}" ]; then t="${{ github.event.inputs.tag }}"
+          elif [ "${{ github.ref_type }}" = tag ]; then t="${{ github.ref_name }}"
+          else t=""; fi
+          echo "TAG=$t" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -49,6 +57,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Num push no master: a release da versão do Cargo.toml.
+          [ -n "$TAG" ] || TAG="v$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          echo "release: $TAG"
           # A release é criada pelo outro workflow: espera ela existir.
           for i in $(seq 1 60); do gh release view "$TAG" >/dev/null 2>&1 && break; sleep 60; done
           gh release upload "$TAG" pacotes/*.tgz --clobber
