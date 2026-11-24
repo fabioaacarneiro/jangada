@@ -68,8 +68,7 @@ jobs:
   distros:
     name: ${{ matrix.distro }}
     runs-on: ubuntu-latest
-    # O Slackware compila o motor (umas duas horas na primeira vez; depois vem do cache).
-    timeout-minutes: 340
+    timeout-minutes: 90
     strategy:
       # Uma distribuição que falha não derruba as outras.
       fail-fast: false
@@ -81,30 +80,11 @@ jobs:
           - distro: arch
             imagem: archlinux:latest
             arquivos: pacotes/*.pkg.tar.zst
-          # O -current (o 15.0 não tem um GTK 4 novo o bastante; nele fica a Jangada 1.15).
-          - distro: slackware
-            imagem: aclemons/slackware:current
-            arquivos: pacotes/*.tgz
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
-
-      # O motor compilado para o Slackware fica guardado (só se compila de novo quando a
-      # versão do WebKitGTK em ci/motor-slackware.sh muda).
-      - name: Cache do motor (Slackware)
-        if: matrix.distro == 'slackware'
-        uses: actions/cache@v4
-        with:
-          path: motor-slackware
-          key: motor-slackware-${{ hashFiles('ci/motor-slackware.sh') }}
-
-      - name: Liberar espaço (o motor do Slackware ocupa uns 20 GB compilando)
-        if: matrix.distro == 'slackware'
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          df -h /
 
       - name: Compilar, empacotar e conferir (${{ matrix.imagem }})
         run: docker run --rm -v "$PWD:/src" -w /src ${{ matrix.imagem }} sh ci/${{ matrix.distro }}.sh
@@ -141,3 +121,41 @@ jobs:
           notas=$(git log -1 --format=%B | grep -v '^Co-Authored-By:' || true)
           gh release create "$GITHUB_REF_NAME" baixados/* --title "Jangada ${GITHUB_REF_NAME#v}" --notes "$notas" \
             || gh release upload "$GITHUB_REF_NAME" baixados/* --clobber
+
+  # O Slackware -current à parte: ele compila o motor (o Slackware não tem o WebKitGTK),
+  # umas duas horas na primeira vez de cada versão (depois vem do cache). O pacote entra na
+  # release quando fica pronto, sem segurar os outros.
+  slackware:
+    name: slackware (-current)
+    needs: [publicar]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      # O motor compilado fica guardado (só se compila de novo quando a versão do WebKitGTK
+      # em ci/motor-slackware.sh muda).
+      - name: Cache do motor
+        uses: actions/cache@v4
+        with:
+          path: motor-slackware
+          key: motor-slackware-${{ hashFiles('ci/motor-slackware.sh') }}
+
+      - name: Liberar espaço (o motor ocupa uns 20 GB compilando)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Compilar, empacotar e conferir (Slackware -current)
+        run: docker run --rm -v "$PWD:/src" -w /src aclemons/slackware:current sh ci/slackware.sh
+
+      - name: Pôr o pacote na release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" pacotes/*.tgz --clobber
