@@ -40,7 +40,8 @@ jobs:
       # O motor compilado fica guardado (só se compila de novo quando a versão do WebKitGTK
       # em ci/motor-slackware.sh muda).
       - name: Cache do motor
-        uses: actions/cache@v4
+        id: motor
+        uses: actions/cache/restore@v4
         with:
           path: motor-slackware
           key: motor-slackware-${{ hashFiles('ci/motor-slackware.sh') }}
@@ -52,6 +53,15 @@ jobs:
 
       - name: Compilar, empacotar e conferir (Slackware -current)
         run: docker run --rm -v "$PWD:/src" -w /src aclemons/slackware:current sh ci/slackware.sh
+
+      # O motor leva horas para compilar: fica guardado assim que existe, mesmo que um passo
+      # de depois falhe (antes, uma falha no fim jogava a compilação inteira fora).
+      - name: Guardar o motor no cache
+        if: always() && steps.motor.outputs.cache-hit != 'true' && hashFiles('motor-slackware/usr/lib/jangada/motor/VERSAO') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: motor-slackware
+          key: motor-slackware-${{ hashFiles('ci/motor-slackware.sh') }}
 
       - name: Pôr o pacote na release
         env:
