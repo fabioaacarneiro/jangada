@@ -1,0 +1,54 @@
+# O pacote do Slackware -current, à parte dos outros: o Slackware não tem o WebKitGTK, e
+# o motor é compilado aqui (umas duas horas na primeira vez de cada versão; depois vem do
+# cache). A cada tag v* (e à mão, com a tag), o pacote entra na release daquela versão
+# quando fica pronto, sem segurar os outros pacotes.
+name: Slackware
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "A release (tag) que recebe o pacote"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  slackware:
+    name: slackware (-current)
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      # O motor compilado fica guardado (só se compila de novo quando a versão do WebKitGTK
+      # em ci/motor-slackware.sh muda).
+      - name: Cache do motor
+        uses: actions/cache@v4
+        with:
+          path: motor-slackware
+          key: motor-slackware-${{ hashFiles('ci/motor-slackware.sh') }}
+
+      - name: Liberar espaço (o motor ocupa uns 20 GB compilando)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Compilar, empacotar e conferir (Slackware -current)
+        run: docker run --rm -v "$PWD:/src" -w /src aclemons/slackware:current sh ci/slackware.sh
+
+      - name: Pôr o pacote na release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A release é criada pelo outro workflow: espera ela existir.
+          for i in $(seq 1 60); do gh release view "$TAG" >/dev/null 2>&1 && break; sleep 60; done
+          gh release upload "$TAG" pacotes/*.tgz --clobber

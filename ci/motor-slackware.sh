@@ -13,7 +13,14 @@ cd "$(dirname "$0")/.."
 destino=${1:?uso: sh ci/motor-slackware.sh PASTA}
 # A versão do motor (a mesma linha das distribuições; subir aqui a cada correção).
 WEBKIT=2.54.3
+WEBKIT_SHA256=2779c1b46f88762e8400650271ba14452dc4e30b37059981552d8b562b7d0862
 UNIFDEF=2.12
+UNIFDEF_SHA256=43ce0f02ecdcdc723b2475575563ddb192e988c886d368260bc0a63aee3ac400
+# Baixa e confere pela soma fixada aqui (IPv4: no contêiner o IPv6 não sai).
+baixar() {
+    curl -4 -fsSL --retry 3 --max-time 900 -o "$2" "$1" || wget -4 -q -O "$2" "$1"
+    echo "$3  $2" | sha256sum -c -
+}
 motor="$destino/usr/lib/jangada/motor"
 if [ -f "$motor/VERSAO" ] && [ "$(cat "$motor/VERSAO")" = "$WEBKIT" ]; then
     echo "==> Motor WebKitGTK $WEBKIT já compilado (cache)"
@@ -25,13 +32,11 @@ trab=$(mktemp -d)
 trap 'rm -rf "$trab"' EXIT
 cd "$trab"
 # O unifdef (a compilação do WebKit precisa; o Slackware não tem).
-wget -q "https://dotat.at/prog/unifdef/unifdef-$UNIFDEF.tar.xz"
+baixar "https://dotat.at/prog/unifdef/unifdef-$UNIFDEF.tar.xz" "unifdef-$UNIFDEF.tar.xz" "$UNIFDEF_SHA256"
 tar xf "unifdef-$UNIFDEF.tar.xz"
 make -s -C "unifdef-$UNIFDEF" prefix=/usr/local install >/dev/null
-# O código do WebKitGTK e a soma publicada.
-wget -q "https://webkitgtk.org/releases/webkitgtk-$WEBKIT.tar.xz"
-wget -q "https://webkitgtk.org/releases/webkitgtk-$WEBKIT.tar.xz.sha256sum"
-sha256sum -c "webkitgtk-$WEBKIT.tar.xz.sha256sum"
+# O código do WebKitGTK (a soma é a publicada em webkitgtk.org, no .sums da versão).
+baixar "https://webkitgtk.org/releases/webkitgtk-$WEBKIT.tar.xz" "webkitgtk-$WEBKIT.tar.xz" "$WEBKIT_SHA256"
 tar xf "webkitgtk-$WEBKIT.tar.xz"
 cd "webkitgtk-$WEBKIT"
 # Só o que a Jangada usa (sem documentação, MiniBrowser, WebDriver, gamepad, voz). A
