@@ -5,8 +5,11 @@
 //!
 //! Os sinais do motor escrevem na `Pagina` da aba e pedem um quadro à janela
 //! (`glove_ui::redraw_soon`); a Jangada lê tudo no quadro seguinte. Os scripts da Jangada
-//! (senhas, extensões) rodam num mundo isolado ("jangada"): a página não os vê e não
-//! consegue falar com a Jangada se passando por eles.
+//! (senhas) rodam num mundo isolado ("jangada"), e os de cada extensão num mundo só dela:
+//! a página não os vê e não consegue falar com a Jangada se passando por eles.
+//!
+//! As páginas das extensões (a janelinha do botão, as opções) vêm do esquema
+//! `jangada-extension://`, servido aqui direto da pasta da extensão.
 
 use std::cell::{Cell, RefCell};
 use std::path::{Path, PathBuf};
@@ -15,14 +18,19 @@ use std::rc::Rc;
 use glove_ui::gtk::{self, gdk, gio, glib, prelude::*};
 use webkit6::prelude::*;
 use webkit6::{
-    CookieAcceptPolicy, CookiePersistentStorage, Download, FindOptions, HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NetworkSession, PermissionRequest, PolicyDecisionType, PrintOperation, ResponsePolicyDecision, ScriptDialog, ScriptDialogType, Settings, UserContentFilter, UserContentInjectedFrames, UserContentManager, UserStyleLevel, UserStyleSheet, WebContext, WebView,
+    CookieAcceptPolicy, CookiePersistentStorage, Download, FindOptions, HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NetworkSession, PermissionRequest, PolicyDecisionType, PrintOperation, ResponsePolicyDecision, ScriptDialog, ScriptDialogType, Settings, URISchemeRequest, URISchemeResponse, UserContentFilter, UserContentInjectedFrames, UserContentManager, UserScript, UserScriptInjectionTime, UserStyleLevel, UserStyleSheet, WebContext, WebView,
 };
+
+use crate::extensoes::{self, Extensao, CANAL_PAGINAS, ESQUEMA};
+use crate::ponte;
 
 /// O mundo isolado dos scripts da Jangada (e o nome do canal deles para cá).
 pub const MUNDO: &str = "jangada";
 
 /// O que uma aba sabe da página (escrito pelos sinais do motor, lido pela janela).
 pub struct Pagina {
+    /// O número da aba (o `tabs.Tab.id` das extensões): não muda enquanto ela existir.
+    pub id: u32,
     pub view: WebView,
     pub title: String,
     pub url: String,
@@ -63,6 +71,15 @@ pub struct Pagina {
     pub parentes: Rc<Cell<bool>>,
     /// O que já foi notado mudar (a janela redesenha quando muda).
     pub versao: u64,
+    /// As extensões com scripts de conteúdo na página de agora.
+    pub extensoes: Vec<String>,
+    /// As extensões cuja API já está no conteúdo da aba (para as páginas delas, como as
+    /// opções), e se o canal das páginas de extensão já existe nela.
+    pub apis_ext: Vec<String>,
+    pub canal_ext: bool,
+    /// O CORS livre na aba vale para as páginas desta extensão (só enquanto a aba mostrar
+    /// uma página dela).
+    pub cors_ext: Option<String>,
 }
 
 impl Pagina {
@@ -140,6 +157,88 @@ thread_local! {
     /// As abas abertas (para achar a `Pagina` de uma mensagem dos scripts).
     static ABAS: RefCell<Vec<std::rc::Weak<RefCell<Pagina>>>> = const { RefCell::new(Vec::new()) };
     static PROXIMO_DOWNLOAD: Cell<u32> = const { Cell::new(1) };
+    static PROXIMA_ABA: Cell<u32> = const { Cell::new(1) };
+    /// As abas na ordem da faixa e a escolhida (a janela atualiza; as extensões consultam).
+    static ORDEM: RefCell<(Vec<u32>, u32)> = const { RefCell::new((Vec::new(), 0)) };
+    /// A pessoa clicou numa página (a janelinha de extensão aberta fecha).
+    pub static CLIQUE_NA_PAGINA: Cell<bool> = const { Cell::new(false) };
+    /// Endereços de páginas de extensão que a própria Jangada mandou abrir (a barra, as
+    /// abas da última vez, as extensões): só esses entram numa aba que mostra outro site.
+    static PERMITIDAS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// As abas na ordem da faixa e a escolhida.
+pub fn ordem() -> (Vec<u32>, u32) {
+    ORDEM.with(|o| o.borrow().clone())
+}
+
+/// A janela diz a ordem das abas e a escolhida.
+pub fn definir_ordem(ids: Vec<u32>, ativa: u32) {
+    ORDEM.with(|o| {
+        let mut o = o.borrow_mut();
+        if o.0 != ids || o.1 != ativa {
+            *o = (ids, ativa);
+        }
+    });
+}
+
+/// A Jangada vai abrir este endereço (de uma extensão): pode entrar mesmo vindo de outro
+/// site.
+pub fn permitir_navegacao(url: &str) {
+    if url.starts_with(ESQUEMA) {
+        PERMITIDAS.with(|p| {
+            let mut p = p.borrow_mut();
+            p.push(url.to_string());
+            if p.len() > 16 {
+                p.remove(0);
+            }
+        });
+    }
+}
+
+/// Uma página pode ir para este endereço de extensão? Se ela já é da mesma extensão, se
+/// a Jangada mandou, se é ir e voltar no histórico, ou se o arquivo é acessível pela web.
+fn pode_ir_para_extensao(atual: &str, alvo: &str, historico: bool) -> bool {
+    let Some((id, caminho)) = extensoes::partes_da_url(alvo) else { return true };
+    let Some(e) = extensoes::ativa(&id) else { return false };
+    if extensoes::partes_da_url(atual).is_some_and(|(a, _)| a == id) || historico {
+        return true;
+    }
+    let mandou = PERMITIDAS.with(|p| {
+        let mut p = p.borrow_mut();
+        p.iter().position(|u| u == alvo).map(|i| p.remove(i)).is_some()
+    });
+    mandou || e.acessivel(&caminho)
+}
+
+/// Serve um arquivo de extensão (jangada-extension://ID/caminho). Uma página da própria
+/// extensão pede o que quiser da pasta dela; uma página da web, só o que a extensão
+/// declarou acessível (`web_accessible_resources`).
+fn servir_extensao(req: &URISchemeRequest) {
+    let falhar = |req: &URISchemeRequest, msg: &str| {
+        let mut e = glib::Error::new(gio::IOErrorEnum::NotFound, msg);
+        req.finish_error(&mut e);
+    };
+    let url = req.uri().map(|u| u.to_string()).unwrap_or_default();
+    let Some((id, caminho)) = extensoes::partes_da_url(&url) else { return falhar(req, "endereço inválido") };
+    let Some(e) = extensoes::ativa(&id) else { return falhar(req, "extensão não instalada ou desligada") };
+    let topo = req.web_view().and_then(|v| v.uri()).map(|u| u.to_string()).unwrap_or_default();
+    let da_mesma = extensoes::partes_da_url(&topo).is_some_and(|(t, _)| t == id);
+    if !da_mesma && !e.acessivel(&caminho) {
+        return falhar(req, "arquivo não acessível pela web");
+    }
+    let Some(arq) = extensoes::arquivo(&e.pasta, &caminho) else { return falhar(req, "arquivo não encontrado") };
+    match std::fs::read(&arq) {
+        Ok(dados) => {
+            let n = dados.len() as i64;
+            let fluxo = gio::MemoryInputStream::from_bytes(&glib::Bytes::from_owned(dados));
+            let r = URISchemeResponse::new(&fluxo, n);
+            r.set_content_type(extensoes::tipo_do_arquivo(&arq));
+            r.set_status(200, Some("OK"));
+            req.finish_with_response(&r);
+        }
+        Err(_) => falhar(req, "arquivo não encontrado"),
+    }
 }
 
 struct Motor {
@@ -176,6 +275,13 @@ pub fn iniciar(privada: bool, dados: &Path, aj: &crate::ajustes::Ajustes) {
     sessao.connect_download_started(|_, d| novo_download(d));
     let ctx = WebContext::default();
     if let Some(ctx) = &ctx {
+        // As páginas e os arquivos das extensões: um esquema seguro (as APIs que pedem
+        // contexto seguro funcionam) e com CORS (fetch() de arquivos da própria extensão).
+        if let Some(sm) = ctx.security_manager() {
+            sm.register_uri_scheme_as_secure(ESQUEMA);
+            sm.register_uri_scheme_as_cors_enabled(ESQUEMA);
+        }
+        ctx.register_uri_scheme(ESQUEMA, servir_extensao);
         ctx.set_cache_model(webkit6::CacheModel::WebBrowser);
         ctx.set_spell_checking_enabled(true);
         ctx.set_spell_checking_languages(&["pt_BR", "en_US"]);
@@ -251,7 +357,7 @@ fn filtros_para(view: &WebView, url: &str) {
     }
 }
 
-fn abas_abertas() -> Vec<Shared> {
+pub fn abas_abertas() -> Vec<Shared> {
     ABAS.with(|a| {
         let mut a = a.borrow_mut();
         a.retain(|w| w.strong_count() > 0);
@@ -325,6 +431,7 @@ pub fn nova_aba_adiada(url: &str, titulo: &str) -> Option<Shared> {
 /// A aba adiada foi escolhida: carrega agora.
 pub fn carregar_adiada(view: &WebView, url: &str) {
     filtros_para(view, url);
+    permitir_navegacao(url);
     view.load_uri(url);
 }
 
@@ -336,7 +443,13 @@ pub fn aba_criada(view: WebView, url: &str) -> Shared {
 }
 
 fn preparar(view: WebView, url: &str) -> Shared {
+    let id = PROXIMA_ABA.with(|n| {
+        let i = n.get();
+        n.set(i + 1);
+        i
+    });
     let p: Shared = Rc::new(RefCell::new(Pagina {
+        id,
         view: view.clone(),
         title: String::new(),
         url: url.to_string(),
@@ -360,6 +473,10 @@ fn preparar(view: WebView, url: &str) -> Shared {
         fechar: false,
         parentes: Rc::new(Cell::new(false)),
         versao: 0,
+        extensoes: Vec::new(),
+        apis_ext: Vec::new(),
+        canal_ext: false,
+        cors_ext: None,
     }));
     ABAS.with(|a| a.borrow_mut().push(Rc::downgrade(&p)));
     view.set_hexpand(true);
@@ -367,6 +484,7 @@ fn preparar(view: WebView, url: &str) -> Shared {
     ligar(&p, &view);
     if !url.is_empty() {
         filtros_para(&view, url);
+        permitir_navegacao(url);
         view.load_uri(url);
     }
     p
@@ -487,6 +605,20 @@ fn ligar(p: &Shared, view: &WebView) {
         m.connect_motion(move |_, x, y| anota(x, y));
         view.add_controller(m);
     }
+    // Um clique na página: a janelinha de extensão aberta fecha (como clicar fora dela).
+    // Só olha: o clique segue para a página.
+    {
+        let l = gtk::EventControllerLegacy::new();
+        l.set_propagation_phase(gtk::PropagationPhase::Capture);
+        l.connect_event(|_, ev| {
+            if ev.event_type() == gdk::EventType::ButtonPress && ponte::POPUP.with(|p| p.borrow().is_some()) {
+                CLIQUE_NA_PAGINA.set(true);
+                glove_ui::redraw_soon();
+            }
+            glib::Propagation::Proceed
+        });
+        view.add_controller(l);
+    }
     // O menu de contexto: o da Jangada (o do motor não aparece).
     {
         let fraco = fraco.clone();
@@ -568,6 +700,11 @@ fn ligar(p: &Shared, view: &WebView) {
                 glove_ui::redraw_soon();
                 return None;
             }
+            // Uma página de extensão abrindo outra página dela numa aba nova.
+            let atual = v.uri().map(|u| u.to_string()).unwrap_or_default();
+            if extensoes::partes_da_url(&url).is_some_and(|(id, _)| extensoes::partes_da_url(&atual).is_some_and(|(a, _)| a == id)) {
+                permitir_navegacao(&url);
+            }
             let nova = com(|m| {
                 let ucm = conteudo(m);
                 WebView::builder().related_view(v).user_content_manager(&ucm).settings(&m.ajustes).build()
@@ -580,9 +717,12 @@ fn ligar(p: &Shared, view: &WebView) {
             Some(nova.upcast())
         });
     }
-    // Botão do meio ou Ctrl + clique num link: aba nova por trás.
+    // Botão do meio ou Ctrl + clique num link: aba nova por trás. E a guarda das páginas
+    // de extensão: um site não abre uma página de extensão (só os arquivos que ela
+    // declarou acessíveis), e a aba que vai mostrar uma ganha a API dela.
     {
-        view.connect_decide_policy(move |_, d, tipo| {
+        let fraco = fraco.clone();
+        view.connect_decide_policy(move |v, d, tipo| {
             // A resposta chegou e o motor não sabe mostrar o tipo (um .zip, um .deb, um
             // application/octet-stream): é um download. Sem isto o motor só baixava o que
             // viesse marcado como anexo, e o resto era ignorado sem aviso.
@@ -599,6 +739,21 @@ fn ligar(p: &Shared, view: &WebView) {
             let Some(n) = d.downcast_ref::<NavigationPolicyDecision>() else { return false };
             let Some(acao) = n.navigation_action() else { return false };
             let url = acao.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+            if url.starts_with(ESQUEMA) {
+                let atual = v.uri().map(|u| u.to_string()).unwrap_or_default();
+                let historico = matches!(acao.navigation_type(), webkit6::NavigationType::BackForward | webkit6::NavigationType::Reload);
+                if !pode_ir_para_extensao(&atual, &url, historico) {
+                    d.ignore();
+                    return true;
+                }
+                if tipo == PolicyDecisionType::NavigationAction {
+                    if let (Some(p), Some((id, _))) = (fraco.upgrade(), extensoes::partes_da_url(&url)) {
+                        if let (Some(e), Ok(mut p)) = (extensoes::ativa(&id), p.try_borrow_mut()) {
+                            preparar_pagina_de_extensao(v, &mut p, &e);
+                        }
+                    }
+                }
+            }
             let ctrl = gdk::ModifierType::from_bits_truncate(acao.modifiers()).contains(gdk::ModifierType::CONTROL_MASK);
             // O motor manda o botão do meio e o Ctrl + clique como "janela nova".
             if (acao.mouse_button() == 2 || ctrl) && acao.navigation_type() == webkit6::NavigationType::LinkClicked && !url.is_empty() {
@@ -616,8 +771,25 @@ fn ligar(p: &Shared, view: &WebView) {
         let c = com_pagina.clone();
         view.connect_load_changed(move |v, ev| {
             if ev == LoadEvent::Started {
+                let u = v.uri().map(|u| u.to_string()).unwrap_or_default();
                 // Os escudos do site (ligados ou não nele) antes de a página pedir o resto.
-                filtros_para(v, &v.uri().map(|u| u.to_string()).unwrap_or_default());
+                filtros_para(v, &u);
+                // Saiu da página da extensão: o CORS livre dela não vale para outro site.
+                let ext = extensoes::partes_da_url(&u).map(|(id, _)| id);
+                c(&|p| {
+                    p.extensoes.clear();
+                    if p.cors_ext.is_some() && p.cors_ext != ext {
+                        p.cors_ext = None;
+                        p.view.set_cors_allowlist(&[]);
+                    }
+                    // E o canal das páginas de extensão sai: o site não o vê.
+                    if p.canal_ext && ext.is_none() {
+                        if let Some(ucm) = p.view.user_content_manager() {
+                            ucm.unregister_script_message_handler(CANAL_PAGINAS, None);
+                        }
+                        p.canal_ext = false;
+                    }
+                });
                 c(&|p| {
                     p.erro_mostrando = std::mem::take(&mut p.erro_alt);
                     p.erro_pedido = None;
@@ -686,11 +858,112 @@ fn ligar(p: &Shared, view: &WebView) {
         let c = com_pagina.clone();
         fc.connect_failed_to_find_text(move |_| c(&|p| p.achados = (0, 0)));
     }
-    // As mensagens dos scripts da Jangada (o mundo isolado).
+    // As mensagens dos scripts da Jangada (o mundo isolado) e as das páginas de extensão
+    // abertas na aba (o canal delas só passa a existir quando a aba abre uma).
     if let Some(ucm) = view.user_content_manager() {
         let v = view.clone();
         ucm.connect_script_message_received(Some(MUNDO), move |_, valor| mensagem(&v, &valor.to_str()));
+        let v = view.clone();
+        ucm.connect_script_message_received(Some(CANAL_PAGINAS), move |_, valor| pedido_de_pagina(&v, &valor.to_str()));
     }
+}
+
+/// Um pedido de uma página de extensão (numa aba ou na janelinha): a extensão é a do
+/// endereço da página, nunca a que a mensagem diz.
+fn pedido_de_pagina(view: &WebView, texto: &str) {
+    let url = view.uri().map(|u| u.to_string()).unwrap_or_default();
+    if let Some((id, _)) = extensoes::partes_da_url(&url) {
+        ponte::pedido(ponte::Origem::Pagina { view: view.clone(), ext: id }, texto);
+    }
+}
+
+/// A aba vai mostrar uma página de extensão: o canal das páginas, a API dela (no começo de
+/// cada documento dela) e o CORS livre para os sites que ela pede.
+fn preparar_pagina_de_extensao(view: &WebView, p: &mut Pagina, e: &Extensao) {
+    let Some(ucm) = view.user_content_manager() else { return };
+    if !p.canal_ext {
+        ucm.register_script_message_handler(CANAL_PAGINAS, None);
+        p.canal_ext = true;
+    }
+    if !p.apis_ext.contains(&e.id) {
+        ucm.add_script(&UserScript::new(&extensoes::api_das_paginas(e), UserContentInjectedFrames::TopFrame, UserScriptInjectionTime::Start, &[], &[]));
+        p.apis_ext.push(e.id.clone());
+    }
+    let hosts = e.hosts_do_motor();
+    let hosts: Vec<&str> = hosts.iter().map(String::as_str).collect();
+    view.set_cors_allowlist(&hosts);
+    p.cors_ext = Some(e.id.clone());
+}
+
+/// A janelinha de uma extensão (a página do botão dela): fora das abas, com a API da
+/// extensão, o script que a mede e o CORS livre para os sites que ela pede.
+pub fn janelinha(e: &Extensao, caminho: &str) -> Option<WebView> {
+    let view = com(|m| {
+        let ucm = UserContentManager::new();
+        ucm.register_script_message_handler(CANAL_PAGINAS, None);
+        ucm.add_script(&UserScript::new(&extensoes::api_das_paginas(e), UserContentInjectedFrames::TopFrame, UserScriptInjectionTime::Start, &[], &[]));
+        ucm.add_script(&UserScript::new(ponte::MEDIR_POPUP, UserContentInjectedFrames::TopFrame, UserScriptInjectionTime::Start, &[], &[]));
+        WebView::builder().network_session(&m.sessao).user_content_manager(&ucm).settings(&m.ajustes).build()
+    })?;
+    let hosts = e.hosts_do_motor();
+    let hosts: Vec<&str> = hosts.iter().map(String::as_str).collect();
+    view.set_cors_allowlist(&hosts);
+    // Uma referência fraca: a janelinha abre e fecha muitas vezes, e uma forte (a página
+    // segurando o canal que segura a página) a deixaria na memória para sempre.
+    if let Some(ucm) = view.user_content_manager() {
+        let v = view.downgrade();
+        ucm.connect_script_message_received(Some(CANAL_PAGINAS), move |_, valor| {
+            if let Some(v) = v.upgrade() {
+                pedido_de_pagina(&v, &valor.to_str());
+            }
+        });
+    }
+    // Ir para outra página da extensão (ou para um site) dentro da janelinha pode; uma
+    // página de outra extensão, só se acessível.
+    view.connect_decide_policy(|v, d, tipo| {
+        if tipo != PolicyDecisionType::NavigationAction {
+            return false;
+        }
+        let Some(n) = d.downcast_ref::<NavigationPolicyDecision>() else { return false };
+        let Some(acao) = n.navigation_action() else { return false };
+        let url = acao.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+        let atual = v.uri().map(|u| u.to_string()).unwrap_or_default();
+        if url.starts_with(ESQUEMA) && !pode_ir_para_extensao(&atual, &url, false) {
+            d.ignore();
+            return true;
+        }
+        false
+    });
+    // window.open e target=_blank: uma aba (a janelinha fecha, como no Chrome).
+    view.connect_create(|v, acao| {
+        let url = acao.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+        if !url.is_empty() {
+            let atual = v.uri().map(|u| u.to_string()).unwrap_or_default();
+            if extensoes::partes_da_url(&url).is_some_and(|(id, _)| extensoes::partes_da_url(&atual).is_some_and(|(a, _)| a == id)) {
+                permitir_navegacao(&url);
+            }
+            NOVAS_ABAS.with(|n| n.borrow_mut().push((url, false, None)));
+            ponte::fechar_popup_pedido();
+        }
+        None
+    });
+    view.connect_close(|_| ponte::fechar_popup_pedido());
+    // Esc fecha a janelinha (como no Chrome).
+    {
+        let k = gtk::EventControllerKey::new();
+        k.connect_key_pressed(|_, tecla, _, _| {
+            if tecla == gdk::Key::Escape {
+                ponte::fechar_popup_pedido();
+                return glib::Propagation::Stop;
+            }
+            glib::Propagation::Proceed
+        });
+        view.add_controller(k);
+    }
+    let url = e.url(caminho);
+    permitir_navegacao(&url);
+    view.load_uri(&url);
+    Some(view)
 }
 
 /// Uma mensagem de um script da Jangada na página (senhas, extensões).
@@ -698,25 +971,15 @@ fn mensagem(view: &WebView, m: &str) {
     let url = view.uri().map(|u| u.to_string()).unwrap_or_default();
     if m == PRONTO {
         // Um por vez: um erro de escrita no script de uma extensão não leva os outros.
-        for js in crate::senhas::script_da_pagina(&url).into_iter().chain(crate::extensoes::scripts_para(&url)) {
+        if let Some(js) = crate::senhas::script_da_pagina(&url) {
             view.evaluate_javascript(&js, Some(MUNDO), Some(&url), None::<&gio::Cancellable>, |_| {});
         }
+        scripts_das_extensoes(view, &url);
         return;
     }
     if m == MOUSE_PRESO {
         AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("A página prendeu o mouse: Esc solta.").to_string()));
         glove_ui::redraw_soon();
-        return;
-    }
-    if let Some(resto) = m.strip_prefix(crate::extensoes::MARCA) {
-        if let Ok(pedido) = serde_json::from_str::<serde_json::Value>(resto) {
-            let id = pedido["ext"].as_str().unwrap_or("").to_string();
-            let op = pedido["op"].as_str().unwrap_or("").to_string();
-            let k = pedido["k"].clone();
-            let resposta = crate::extensoes::armazenar(&id, &op, &pedido["d"]);
-            let js = format!("window.__jangadaResposta&&window.__jangadaResposta({k},{resposta});");
-            view.evaluate_javascript(&js, Some(MUNDO), None, None::<&gio::Cancellable>, |_| {});
-        }
         return;
     }
     if let Some(pedido) = crate::senhas::ler(m) {
@@ -745,6 +1008,34 @@ fn mensagem(view: &WebView, m: &str) {
                     }
                 });
             }
+        }
+    }
+}
+
+/// Os scripts de conteúdo das extensões na página: cada extensão no mundo dela, com o
+/// canal dela para a Jangada (criado na primeira vez que ela entra numa página da aba).
+fn scripts_das_extensoes(view: &WebView, url: &str) {
+    let todas = extensoes::scripts_para(url);
+    if todas.is_empty() {
+        return;
+    }
+    let Some(ucm) = view.user_content_manager() else { return };
+    let pagina = abas_abertas().into_iter().find(|p| &p.borrow().view == view);
+    for (ext, mundo, partes) in todas {
+        if ucm.register_script_message_handler(&mundo, Some(&mundo)) {
+            let (v, e) = (view.clone(), ext.clone());
+            ucm.connect_script_message_received(Some(&mundo), move |_, valor| {
+                ponte::pedido(ponte::Origem::Conteudo { view: v.clone(), ext: e.clone() }, &valor.to_str());
+            });
+        }
+        if let Some(p) = &pagina {
+            let mut p = p.borrow_mut();
+            if !p.extensoes.contains(&ext) {
+                p.extensoes.push(ext.clone());
+            }
+        }
+        for js in partes {
+            view.evaluate_javascript(&js, Some(&mundo), Some(url), None::<&gio::Cancellable>, |_| {});
         }
     }
 }

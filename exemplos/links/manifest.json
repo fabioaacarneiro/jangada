@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Links da página",
+  "version": "1.0",
+  "description": "Exemplo com janelinha: conta os links da página, destaca todos com a cor escolhida nas opções e mostra o número no botão.",
+  "permissions": ["storage"],
+  "action": {
+    "default_title": "Links da página",
+    "default_popup": "janelinha.html",
+    "default_icon": { "16": "icone.svg", "32": "icone.svg" }
+  },
+  "options_page": "opcoes.html",
+  "content_scripts": [{ "matches": ["https://*/*", "http://*/*"], "js": ["conteudo.js"] }]
+}

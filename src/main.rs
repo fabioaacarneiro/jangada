@@ -13,6 +13,7 @@ mod extensoes;
 mod importar;
 mod inicio;
 mod motor;
+mod ponte;
 mod senhas;
 
 use std::io::{Read, Write};
@@ -402,6 +403,16 @@ struct Navegador {
     imp_partes: importar::Partes,
     imp_job: Option<std::sync::mpsc::Receiver<importar::Resultado>>,
     imp_msg: Option<String>,
+    /// Extensões na barra: o lugar do botão de cada uma (a janelinha abre embaixo dele), o
+    /// do botão das extensões (a peça), os ícones já desenhados e (versão da lista,
+    /// escala) com que foram feitos.
+    ext_botoes: Vec<(String, Rect)>,
+    ext_menu_rect: Option<Rect>,
+    ext_icones: std::collections::HashMap<String, Option<Canvas>>,
+    ext_icones_de: (u64, u32),
+    /// A janelinha da extensão: o botão em que ela se ancora e onde ela está agora.
+    popup_ancora: Rect,
+    popup_rect: Option<Rect>,
 }
 
 impl Navegador {
@@ -443,7 +454,10 @@ impl Navegador {
     /// lado, ligado à página da aba atual.
     fn ferramentas(&mut self) {
         motor::ferramentas_dev(true);
-        if let Some(v) = self.view() {
+        // Com o teclado na janelinha de uma extensão, o inspetor é o dela.
+        if let Some(v) = self.popup_com_foco() {
+            motor::inspecionar(&v);
+        } else if let Some(v) = self.view() {
             motor::inspecionar(&v);
         }
     }
@@ -547,6 +561,10 @@ impl Navegador {
     }
 
     fn mudar(&mut self, i: usize) {
+        // Outra aba à frente: a janelinha da extensão fecha (como no Chrome).
+        if i != self.atual || self.abas.len() <= 1 {
+            self.fechar_popup();
+        }
         self.atual = i.min(self.abas.len().saturating_sub(1));
         self.mudou = true;
         self.barra_foco = false;
@@ -610,6 +628,7 @@ impl Navegador {
         // endereço não presta), e com a página ainda emprestada esses avisos se perdiam:
         // a barra não mostrava o carregamento nem a página de erro.
         if let Some(v) = v {
+            motor::permitir_navegacao(&url);
             v.load_uri(&url);
         }
         self.focar_pagina = true;
@@ -927,6 +946,9 @@ impl Navegador {
             }
             dir -= 32.0;
         }
+        // As extensões: a peça (o menu de todas) e o botão de cada uma, até onde couber
+        // sem apertar o endereço.
+        let dir = self.botoes_extensoes(ui, dir, by, x0 + 104.0 + 220.0);
         // O endereço no meio (no máximo 640 pontos, centrado como no Safari).
         let livre = (x0 + 104.0, dir - 6.0);
         let fw = (livre.1 - livre.0).clamp(120.0, 640.0);
@@ -1344,6 +1366,7 @@ impl Navegador {
                 None => self.abrir_em(&u, fundo),
             }
         }
+        self.pedidos_das_extensoes();
         // window.close(): a página pediu para fechar a própria aba.
         while let Some(i) = self.abas.iter().position(|a| a.p.borrow().fechar) {
             self.fechar(i);
@@ -1383,6 +1406,10 @@ impl Navegador {
             self.a_vista = atual.clone();
             self.focar_pagina = true;
         }
+        // A ordem das abas e a escolhida, para as extensões (tabs.query).
+        let ids: Vec<u32> = self.abas.iter().map(|a| a.p.borrow().id).collect();
+        let ativa = self.aba().map(|a| a.p.borrow().id).unwrap_or(0);
+        motor::definir_ordem(ids, ativa);
         // A aba adiada foi escolhida: carrega agora.
         let adiada = self.aba().and_then(|a| {
             let mut p = a.p.borrow_mut();
@@ -1504,6 +1531,13 @@ impl Navegador {
         } else if let Some(i) = id.strip_prefix("hist:").and_then(|n| n.parse::<usize>().ok()) {
             if let Some((_, u)) = self.recentes.get(i).cloned() {
                 self.carregar(&u);
+            }
+        } else if let Some(ext) = id.strip_prefix("xacao:") {
+            let ancora = self.ancora_de(ext);
+            self.clicar_extensao(ext, ancora);
+        } else if let Some(ext) = id.strip_prefix("xopcoes:") {
+            if let Some(e) = extensoes::ativa(ext) {
+                abrir_opcoes(&e);
             }
         } else {
             match id {
@@ -1990,6 +2024,9 @@ impl Navegador {
                             if ui.checkbox(&mut ativa, &format!("{} {}", e.nome, e.versao)) {
                                 extensoes::alternar(&e.id);
                             }
+                            if e.ativa && e.opcoes.is_some() && ui.small_button(tr!("Opções…")) {
+                                abrir_opcoes(&e);
+                            }
                             if ui.small_button(tr!("Remover")) {
                                 extensoes::remover(&e.id);
                                 self.ext_msg = Some(tr!("Extensão removida.").into());
@@ -2304,6 +2341,359 @@ fn copiar_texto(t: &str) {
     }
 }
 
+/// As extensões na barra e a janelinha delas.
+impl Navegador {
+    /// A peça (o menu das extensões) e o botão de cada extensão com `action`, da direita
+    /// para a esquerda, até `limite`. Devolve onde a barra continua.
+    fn botoes_extensoes(&mut self, ui: &mut Ui, mut dir: f32, by: f32, limite: f32) -> f32 {
+        self.ext_botoes.clear();
+        self.ext_menu_rect = None;
+        let lista: Vec<extensoes::Extensao> = extensoes::listar().into_iter().filter(|e| e.ativa).collect();
+        if lista.is_empty() {
+            return dir;
+        }
+        let chave = (extensoes::versao(), (ui.c.scale * 100.0) as u32);
+        if self.ext_icones_de != chave {
+            self.ext_icones.clear();
+            self.ext_icones_de = chave;
+        }
+        // A peça: todas as extensões, as opções delas e o gerenciador.
+        let r = Rect::new(dir - 28.0, by, 28.0, 26.0);
+        let h = ui.hit(r);
+        if h.hover {
+            ui.c.fill(rrect(r.x, r.y, r.w, r.h, 6.0), &solid(rgba(0, 0, 0, if h.down { 34 } else { 18 })));
+        }
+        let cor = cor_glifo(ui, 1.0);
+        sem_troca(ui.c, |c| peca(c, r.x + r.w / 2.0, r.y + r.h / 2.0, cor));
+        ui.tooltip(r, tr!("Extensões"));
+        if h.clicked {
+            ui.context_menu((r.x, r.y + r.h + 2.0), &itens_das_extensoes().into_iter().chain([MenuItem::new("ext-gerenciar", tr!("Gerenciar Extensões…"), "")]).collect::<Vec<_>>());
+        }
+        self.ext_menu_rect = Some(r);
+        dir -= 32.0;
+        // Os botões: na ordem da lista, da esquerda para a direita.
+        let com_acao: Vec<&extensoes::Extensao> = lista.iter().filter(|e| e.acao.is_some()).collect();
+        let cabem = (((dir - limite) / 30.0).floor().max(0.0) as usize).min(6);
+        for e in com_acao.iter().take(cabem).rev() {
+            let r = Rect::new(dir - 28.0, by, 28.0, 26.0);
+            self.botao_extensao(ui, e, r);
+            self.ext_botoes.push((e.id.clone(), r));
+            dir -= 30.0;
+        }
+        dir
+    }
+
+    /// O botão de uma extensão: o ícone, o selo (`setBadgeText`) e a dica.
+    fn botao_extensao(&mut self, ui: &mut Ui, e: &extensoes::Extensao, r: Rect) {
+        let est = ponte::estado(&e.id);
+        let aberta = ponte::POPUP.with(|p| p.borrow().as_ref().is_some_and(|p| p.ext == e.id));
+        let h = ui.hit(r);
+        if (h.hover && !est.desligado) || aberta {
+            ui.c.fill(rrect(r.x, r.y, r.w, r.h, 6.0), &solid(rgba(0, 0, 0, if h.down || aberta { 34 } else { 18 })));
+        }
+        if !self.ext_icones.contains_key(&e.id) {
+            let px = (16.0 * ui.c.scale).ceil() as u32;
+            let ic = icone_de_arquivo(e.icone(px), ui.c.scale);
+            self.ext_icones.insert(e.id.clone(), ic);
+        }
+        let (ix, iy) = (r.x + (r.w - 16.0) / 2.0, r.y + (r.h - 16.0) / 2.0);
+        let antes = std::mem::replace(&mut ui.c.dark_remap, false);
+        match self.ext_icones.get(&e.id) {
+            Some(Some(ic)) => ui.c.draw_canvas(ic, ix, iy),
+            // Sem ícone: a inicial do nome num quadradinho.
+            _ => {
+                ui.c.fill(rrect(ix, iy, 16.0, 16.0, 4.0), &solid(ui.theme.accent));
+                let l: String = e.nome.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+                let lw = ui.fonts.measure(&l, 10.0, true);
+                ui.fonts.draw(ui.c, &l, ix + (16.0 - lw) / 2.0, iy + 12.0, 10.0, true, Color::WHITE);
+            }
+        }
+        if est.desligado {
+            let fundo = if ui.theme.dark { rgba(40, 40, 44, 150) } else { rgba(236, 236, 236, 160) };
+            ui.c.fill(rrect(ix - 1.0, iy - 1.0, 18.0, 18.0, 4.0), &solid(fundo));
+        }
+        if !est.selo.is_empty() {
+            let tw = ui.fonts.measure(&est.selo, 9.0, true);
+            let (bw, bh) = ((tw + 6.0).max(13.0), 12.0);
+            let bx = (r.x + r.w - bw).max(r.x);
+            let byy = r.y + r.h - bh;
+            let fundo = est.cor.as_deref().and_then(cor_css).unwrap_or(rgba(217, 48, 37, 255));
+            let letra = est.cor_texto.as_deref().and_then(cor_css).unwrap_or(Color::WHITE);
+            ui.c.fill(rrect(bx, byy, bw, bh, 6.0), &solid(fundo));
+            ui.fonts.draw(ui.c, &est.selo, bx + (bw - tw) / 2.0, byy + 9.0, 9.0, true, letra);
+        }
+        ui.c.dark_remap = antes;
+        // A dica fica de fora com a janelinha aberta (ela cairia por cima).
+        if !aberta {
+            ui.tooltip(r, &est.titulo.clone().unwrap_or_else(|| e.titulo_da_acao()));
+        }
+        if h.clicked && !est.desligado {
+            self.clicar_extensao(&e.id, r);
+        }
+    }
+
+    /// Onde ancorar a janelinha de uma extensão: no botão dela, ou na peça.
+    fn ancora_de(&self, id: &str) -> Rect {
+        self.ext_botoes.iter().find(|(i, _)| i == id).map(|(_, r)| *r).or(self.ext_menu_rect).unwrap_or(Rect::new(self.area.x + self.area.w - 40.0, 7.0, 28.0, 26.0))
+    }
+
+    /// O clique no botão de uma extensão (ou no nome dela no menu): abre a janelinha (o
+    /// segundo clique a fecha) ou avisa os scripts dela na aba (`action.onClicked`).
+    fn clicar_extensao(&mut self, id: &str, ancora: Rect) {
+        let Some(e) = extensoes::ativa(id) else { return };
+        let mesma = ponte::POPUP.with(|p| p.borrow().as_ref().is_some_and(|p| p.ext == id));
+        self.fechar_popup();
+        if mesma {
+            return;
+        }
+        // Com "activeTab", ser chamada nesta aba é poder vê-la (como no Chrome).
+        if e.permissoes.iter().any(|p| p == "activeTab") {
+            if let Some(a) = self.aba() {
+                ponte::conceder_aba(id, a.p.borrow().id);
+            }
+        }
+        match ponte::popup_de(&e) {
+            Some(c) => self.abrir_popup(&e, &c, ancora),
+            None => ponte::clique_na_acao(&e),
+        }
+    }
+
+    fn abrir_popup(&mut self, e: &extensoes::Extensao, caminho: &str, ancora: Rect) {
+        self.fechar_popup();
+        let Some(view) = motor::janelinha(e, caminho) else { return };
+        self.popup_ancora = ancora;
+        ponte::POPUP.with(|p| *p.borrow_mut() = Some(ponte::Popup { ext: e.id.clone(), view, tamanho: None, fechar: false, focada: false, desde: Instant::now() }));
+        self.mudou = true;
+        glove_ui::redraw_soon();
+    }
+
+    fn fechar_popup(&mut self) {
+        let Some(p) = ponte::POPUP.with(|p| p.borrow_mut().take()) else { return };
+        if let Some(h) = &self.host {
+            h.remove(&p.view);
+        }
+        // O processo da janelinha é só dela.
+        p.view.terminate_web_process();
+        self.popup_rect = None;
+        self.focar_pagina = true;
+        self.mudou = true;
+        glove_ui::redraw_soon();
+    }
+
+    /// A janelinha, se o teclado estiver nela.
+    fn popup_com_foco(&self) -> Option<WebView> {
+        ponte::POPUP.with(|p| p.borrow().as_ref().filter(|p| p.view.has_focus()).map(|p| p.view.clone()))
+    }
+
+    /// A janelinha da extensão: embaixo do botão dela, no tamanho que a página pediu (até
+    /// 800 × 600), com moldura e sombra. Fecha ao clicar fora (nas barras ou na página), com
+    /// Esc, com window.close(), ao trocar de aba ou se a extensão for desligada.
+    fn janelinha(&mut self, ui: &mut Ui) {
+        let Some((ext, fechar, tamanho, desde, focada, view)) = ponte::POPUP.with(|p| p.borrow().as_ref().map(|p| (p.ext.clone(), p.fechar, p.tamanho, p.desde, p.focada, p.view.clone()))) else {
+            self.popup_rect = None;
+            motor::CLIQUE_NA_PAGINA.set(false);
+            return;
+        };
+        let na_pagina = motor::CLIQUE_NA_PAGINA.replace(false);
+        let (px, py) = ui.pointer();
+        let fora = ui.mouse_pressed() && !self.popup_rect.is_some_and(|r| r.contains((px, py))) && !self.popup_ancora.contains((px, py));
+        if fechar || na_pagina || fora || extensoes::ativa(&ext).is_none() {
+            self.fechar_popup();
+            return;
+        }
+        let Some(host) = self.host.clone() else { return };
+        // O botão pode ter mudado de lugar (a janela mudou de tamanho).
+        if let Some((_, r)) = self.ext_botoes.iter().find(|(i, _)| *i == ext) {
+            self.popup_ancora = *r;
+        }
+        let (w, h) = (ui.c.w, ui.c.h);
+        // Até a página dizer o tamanho dela, fica fora da janela (medindo-se); se não disser
+        // logo, um tamanho padrão.
+        let medida = tamanho.or_else(|| (desde.elapsed() > Duration::from_millis(700)).then_some((360.0, 240.0)));
+        let Some((pw, ph)) = medida else {
+            host.place(&view, w + 50.0, 0.0, 400.0, 300.0);
+            ui.wake_after(Duration::from_millis(60));
+            return;
+        };
+        let a = self.popup_ancora;
+        let y = (a.y + a.h + 6.0).round();
+        let pw = pw.min(w - 16.0).max(25.0).round();
+        let ph = ph.min(h - y - 8.0).max(25.0).round();
+        let x = (a.x + a.w - pw).min(w - pw - 8.0).max(8.0).round();
+        // A sombra, a borda e o furo onde a página da extensão aparece.
+        for i in 1..=6 {
+            let f = i as f32;
+            ui.c.fill(rrect(x - f, y - f + 2.0, pw + 2.0 * f, ph + 2.0 * f, 6.0 + f), &solid(rgba(0, 0, 0, 7)));
+        }
+        let borda = if ui.theme.dark { rgba(90, 90, 96, 255) } else { rgba(170, 170, 176, 255) };
+        ui.c.fill(rrect(x - 1.0, y - 1.0, pw + 2.0, ph + 2.0, 5.0), &solid(borda));
+        ui.c.clear_rect(x, y, pw, ph);
+        host.place(&view, x, y, pw, ph);
+        self.popup_rect = Some(Rect::new(x, y, pw, ph));
+        if !focada {
+            view.grab_focus();
+            ponte::POPUP.with(|p| {
+                if let Some(p) = p.borrow_mut().as_mut() {
+                    p.focada = true;
+                }
+            });
+        }
+    }
+
+    /// O que as extensões pediram à janela: abrir, mudar e fechar abas, abrir a janelinha.
+    fn pedidos_das_extensoes(&mut self) {
+        let pedidos = ponte::PEDIDOS.with(|p| std::mem::take(&mut *p.borrow_mut()));
+        for p in pedidos {
+            match p {
+                ponte::Pedido::AbrirAba { url, ativa, volta } => {
+                    let url = if url.is_empty() { self.pagina_inicial() } else { url };
+                    // Uma página de extensão já aberta (as opções): vai para a aba dela.
+                    let ja = url.starts_with(extensoes::ESQUEMA).then(|| self.abas.iter().position(|a| a.p.borrow().url == url)).flatten();
+                    let id = match ja {
+                        Some(i) => {
+                            self.mudar(i);
+                            Some(self.abas[i].p.borrow().id)
+                        }
+                        None => {
+                            let antes = self.abas.len();
+                            self.abrir_em(&url, !ativa);
+                            (self.abas.len() > antes).then(|| self.abas[self.abas.len() - 1].p.borrow().id)
+                        }
+                    };
+                    ponte::responder_aba(volta, id);
+                }
+                ponte::Pedido::AtualizarAba { aba, url, ativa, volta } => {
+                    let Some(i) = self.abas.iter().position(|a| a.p.borrow().id == aba) else {
+                        ponte::responder_vazio(volta, Err(format!("No tab with id: {aba}.")));
+                        continue;
+                    };
+                    if let Some(u) = url {
+                        let v = {
+                            let mut p = self.abas[i].p.borrow_mut();
+                            p.url = u.clone();
+                            p.view.clone()
+                        };
+                        motor::permitir_navegacao(&u);
+                        v.load_uri(&u);
+                    }
+                    if ativa {
+                        self.mudar(i);
+                    }
+                    ponte::responder_aba(volta, Some(aba));
+                }
+                ponte::Pedido::FecharAbas { abas, volta } => {
+                    for id in abas {
+                        if let Some(i) = self.abas.iter().position(|a| a.p.borrow().id == id) {
+                            self.fechar(i);
+                        }
+                    }
+                    ponte::responder_vazio(volta, Ok(()));
+                }
+                ponte::Pedido::AbrirPopup { ext, volta } => {
+                    if let Some(e) = extensoes::ativa(&ext) {
+                        if let Some(c) = ponte::popup_de(&e) {
+                            let ancora = self.ancora_de(&ext);
+                            self.abrir_popup(&e, &c, ancora);
+                        }
+                    }
+                    ponte::responder_vazio(volta, Ok(()));
+                }
+            }
+        }
+    }
+}
+
+/// Os itens das extensões ligadas nos menus: o botão de cada uma e as opções.
+fn itens_das_extensoes() -> Vec<MenuItem> {
+    let mut v = Vec::new();
+    for e in extensoes::listar().into_iter().filter(|e| e.ativa) {
+        v.push(MenuItem::new(&format!("xacao:{}", e.id), &e.nome, "").enabled(e.acao.is_some()));
+        if e.opcoes.is_some() {
+            v.push(MenuItem::new(&format!("xopcoes:{}", e.id), &tr!("Opções de {}…", e.nome), ""));
+        }
+    }
+    if v.is_empty() {
+        v.push(MenuItem::new("ext-nenhuma", tr!("Nenhuma extensão ligada"), "").enabled(false));
+    }
+    v.push(MenuItem::Separator);
+    v
+}
+
+/// Abre a página de opções de uma extensão numa aba (ou vai para a aba dela, se já
+/// estiver aberta).
+fn abrir_opcoes(e: &extensoes::Extensao) {
+    if let Some(o) = &e.opcoes {
+        ponte::PEDIDOS.with(|p| p.borrow_mut().push(ponte::Pedido::AbrirAba { url: e.url(o), ativa: true, volta: None }));
+        glove_ui::redraw_soon();
+    }
+}
+
+/// O ícone de uma extensão (PNG, JPEG, SVG...) em 16 pontos.
+fn icone_de_arquivo(caminho: Option<PathBuf>, escala: f32) -> Option<Canvas> {
+    let t = glove_ui::gtk::gdk::Texture::from_filename(caminho?).ok()?;
+    let (w, h) = (t.width(), t.height());
+    if w <= 0 || h <= 0 || w > 2048 || h > 2048 {
+        return None;
+    }
+    let mut buf = vec![0u8; (w * h * 4) as usize];
+    t.download(&mut buf, (w * 4) as usize);
+    // O GTK entrega BGRA pré-multiplicado (na ordem da memória): vira RGBA.
+    for px in buf.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    icone_16(&buf, w, h, escala)
+}
+
+/// Uma cor do CSS (#rgb, #rrggbb, #rrggbbaa, rgb(), rgba() e alguns nomes), para o selo.
+fn cor_css(t: &str) -> Option<Color> {
+    let t = t.trim().to_ascii_lowercase();
+    if let Some(h) = t.strip_prefix('#') {
+        let v = |i: usize, n: usize| u8::from_str_radix(&h[i..i + n], 16).ok().map(|x| if n == 1 { x * 17 } else { x });
+        return match h.len() {
+            3 => Some(rgba(v(0, 1)?, v(1, 1)?, v(2, 1)?, 255)),
+            6 => Some(rgba(v(0, 2)?, v(2, 2)?, v(4, 2)?, 255)),
+            8 => Some(rgba(v(0, 2)?, v(2, 2)?, v(4, 2)?, v(6, 2)?)),
+            _ => None,
+        };
+    }
+    if let Some(dentro) = t.strip_prefix("rgba(").or_else(|| t.strip_prefix("rgb(")).and_then(|r| r.strip_suffix(')')) {
+        let n: Vec<f32> = dentro.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        if n.len() >= 3 {
+            let a = n.get(3).map(|a| if *a <= 1.0 { a * 255.0 } else { *a }).unwrap_or(255.0);
+            return Some(rgba(n[0] as u8, n[1] as u8, n[2] as u8, a.clamp(0.0, 255.0) as u8));
+        }
+        return None;
+    }
+    Some(match t.as_str() {
+        "red" => rgba(217, 48, 37, 255),
+        "green" => rgba(30, 142, 62, 255),
+        "blue" => rgba(26, 115, 232, 255),
+        "orange" => rgba(242, 153, 0, 255),
+        "yellow" => rgba(249, 202, 36, 255),
+        "purple" => rgba(132, 48, 206, 255),
+        "gray" | "grey" => rgba(95, 99, 104, 255),
+        "black" => rgba(0, 0, 0, 255),
+        "white" => rgba(255, 255, 255, 255),
+        _ => return None,
+    })
+}
+
+/// A peça de quebra-cabeça (o botão das extensões).
+fn peca(c: &mut Canvas, cx: f32, cy: f32, cor: Color) {
+    let (x0, y0, x1, y1) = (cx - 6.0, cy - 4.0, cx + 4.0, cy + 6.0);
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(x0, y0);
+    pb.line_to(cx - 3.0, y0);
+    pb.cubic_to(cx - 3.5, y0 - 4.0, cx + 1.5, y0 - 4.0, cx + 1.0, y0);
+    pb.line_to(x1, y0);
+    pb.line_to(x1, cy - 1.0);
+    pb.cubic_to(x1 + 4.0, cy - 1.5, x1 + 4.0, cy + 3.5, x1, cy + 3.0);
+    pb.line_to(x1, y1);
+    pb.line_to(x0, y1);
+    pb.close();
+    c.stroke(pb.finish(), &solid(cor), 1.3);
+}
+
 impl App for Navegador {
     /// O segundo `jangada` manda os endereços pelo socket: a Jangada acorda quando chega
     /// alguém (nada fica rodando de fundo esperando).
@@ -2325,10 +2715,16 @@ impl App for Navegador {
             combo,
             "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+Shift+R" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N" | "Ctrl+U" | "Ctrl+Shift+I" | "Ctrl+L" | "F6" | "Ctrl+F" | "Ctrl+D" | "Ctrl+Shift+B" | "Alt+Left" | "Alt+Right" | "Alt+Home" | "Ctrl+=" | "Ctrl++" | "Ctrl+Shift+=" | "Ctrl+plus" | "Ctrl+equal" | "Ctrl+-" | "Ctrl+minus" | "Ctrl+0"
         ) || (combo == "Escape" && self.achar.is_some());
+        // A janelinha de uma extensão com o teclado: Esc a fecha; colar vai para ela.
+        let popup = self.popup_com_foco();
+        if combo == "Escape" && popup.is_some() {
+            self.fechar_popup();
+            return true;
+        }
         // Colar: uma imagem ou arquivos copiados chegam à página como arquivos (o motor
         // sozinho não os entrega; o Telegram, o WhatsApp etc. não recebiam nada).
         if combo == "Ctrl+V" {
-            return self.view().is_some_and(|v| arquivos::colar(&v));
+            return popup.or_else(|| self.view()).is_some_and(|v| arquivos::colar(&v));
         }
         if da_jangada {
             self.atalho(combo, false);
@@ -2435,8 +2831,11 @@ impl App for Navegador {
                 MenuItem::new("ext-cookies", tr!("Barrar Cookies de Terceiros"), "").checked(self.aj.cookies_terceiros),
                 MenuItem::new("ext-escuro", tr!("Modo Escuro nas Páginas"), "").checked(self.aj.escuro_nas_paginas),
                 MenuItem::Separator,
-                MenuItem::new("ext-gerenciar", tr!("Gerenciar Extensões…"), ""),
-            ]),
+            ]
+            .into_iter()
+            .chain(itens_das_extensoes())
+            .chain([MenuItem::new("ext-gerenciar", tr!("Gerenciar Extensões…"), "")])
+            .collect()),
         ]
     }
 
@@ -2666,6 +3065,8 @@ impl App for Navegador {
                 ui.fonts.draw(ui.c, &t, linha.x + 8.0, linha.y + 16.0, 12.0, false, cor);
             }
         }
+        // A janelinha da extensão, por cima da página.
+        self.janelinha(ui);
         // Os atalhos que chegaram ao kit; o menu de contexto que a página pediu.
         self.teclas(ui);
         self.menu_contexto(ui, area);
@@ -2997,6 +3398,12 @@ fn main() -> std::process::ExitCode {
         imp_partes: importar::Partes { favoritos: true, historico: true, sessoes: true, senhas: true },
         imp_job: None,
         imp_msg: None,
+        ext_botoes: Vec::new(),
+        ext_menu_rect: None,
+        ext_icones: std::collections::HashMap::new(),
+        ext_icones_de: (0, 0),
+        popup_ancora: Rect::new(0.0, 0.0, 0.0, 0.0),
+        popup_rect: None,
     };
     if !urls.is_empty() {
         for u in &urls {

@@ -714,3 +714,12 @@ msgstr "The page {} asks:"
 
 msgid "imagem"
 msgstr "image"
+
+msgid "Opções…"
+msgstr "Options…"
+
+msgid "Opções de {}…"
+msgstr "{} Options…"
+
+msgid "Nenhuma extensão ligada"
+msgstr "No extensions turned on"
