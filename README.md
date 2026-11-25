@@ -85,15 +85,18 @@ pergunta volta.
 
 ## Extensões
 
-A Jangada tem um formato **próprio** de extensões, pequeno: uma pasta com um `manifest.json` e
-arquivos JavaScript e CSS que entram nas páginas que você escolher, e um lugar para o script
-guardar dados. Serve para ajustar sites: esconder um pedaço, mudar um estilo, acrescentar um
-botão ou um aviso.
+A Jangada tem um formato **próprio** de extensões: uma pasta com um `manifest.json` e arquivos
+JavaScript, CSS e HTML. Uma extensão põe scripts e estilos nas páginas que você escolher, ganha um
+**botão na barra** (com ícone e selo) que abre a **janelinha** dela (uma página HTML da
+extensão: botões, menus, um aplicativo inteiro), pode ter uma **página de opções**, guarda dados
+(com aviso de mudança em todas as abas), troca mensagens entre a janelinha e as páginas e fala a
+língua de quem usa (`_locales`).
 
-**Não são as extensões do Chrome.** As da loja do Chrome (e as do Firefox e do Safari) não
-instalam nem funcionam aqui. O `manifest.json` usa os nomes de campo do Chrome, para quem já os
-conhece, e a semelhança acaba aí: não há script de fundo, botão na barra, página de opções nem
-as APIs `chrome.tabs`, `chrome.webRequest` e afins.
+Os nomes de campo e de função são os do Chrome (Manifest V3, `chrome.storage`, `chrome.tabs`,
+`chrome.runtime`, `chrome.action`, `chrome.i18n`): muitas janelinhas e páginas de opções escritas
+para o Chrome funcionam sem mudar nada. **Mas não são as extensões do Chrome:** não há script de
+fundo (service worker) nem `chrome.webRequest`, `scripting`, `contextMenus` e afins, então as da
+loja do Chrome não funcionam por inteiro.
 
 O menor exemplo são dois arquivos numa pasta. O `manifest.json`:
 
@@ -126,21 +129,29 @@ jangada --remove ID                      # tira uma
 jangada --help                           # todas as opções
 ```
 
-Também dá para instalar, ligar, desligar e remover em Preferências ▸ **Instaladas**. Nada entra
-sem a sua confirmação.
+Também dá para instalar, ligar, desligar, abrir as opções e remover em Preferências ▸
+**Instaladas**. Nada entra sem a sua confirmação.
 
-- **O que há:** scripts e CSS por página (`content_scripts`, com `matches`, `js` e `css`), os
-  padrões de endereço (`<all_urls>`, `*://`, `*.dominio.com`, caminhos com `*`) e os dados
-  guardados por extensão (`jangada.storage.local`: `get`, `set`, `remove` e `clear`). O objeto
-  `jangada` também atende por `chrome`, para quem traz um script escrito para o Chrome.
-- **Quando roda:** assim que o documento da página fica pronto (sem esperar as imagens), na
-  página da aba (não nos quadros internos). O `run_at` do manifesto é ignorado.
-- **Mundo isolado:** os scripts das extensões (e os da Jangada, como o das senhas) rodam num mundo
-  à parte: veem a página, mas a página não os vê nem fala com a Jangada por eles. Ainda assim, só
-  instale extensões de quem você confia: elas leem as páginas em que entram.
+- **Na barra:** cada extensão com `action` ganha um botão à esquerda dos escudos; o clique abre a
+  janelinha dela embaixo do botão, no tamanho que a página pede (até 800 × 600). Clicar fora, Esc
+  ou trocar de aba a fecha. A peça de quebra-cabeça ao lado lista todas e as opções de cada uma.
+- **O que há:** scripts e CSS por página (`content_scripts`), a janelinha (`action`), as opções
+  (`options_page`), os arquivos da extensão em `jangada-extension://ID/...`,
+  `web_accessible_resources`, `host_permissions` (as páginas da extensão pedem a esses sites sem
+  a trava de CORS) e a API `jangada` (também `chrome` e `browser`): `storage` (com `onChanged`),
+  `runtime` (mensagens, `getURL`, `getManifest`, `openOptionsPage`), `tabs` (`query`,
+  `sendMessage`, `create`, `update`, `reload`, `remove`), `action` (selo, título, janelinha) e
+  `i18n`.
+- **Quando roda:** o script de página entra assim que o documento fica pronto (sem esperar as
+  imagens), na página da aba (não nos quadros internos). O `run_at` do manifesto é ignorado.
+- **Mundo isolado, um por extensão:** os scripts de cada extensão rodam num mundo só dela: veem a
+  página, mas a página não os vê, e uma extensão não fala pela outra nem lê os dados dela. Os
+  sites não abrem páginas de extensão e só carregam os arquivos que ela declarou acessíveis.
+  Ainda assim, só instale extensões de quem você confia: elas leem as páginas em que entram.
 - **O guia de quem escreve uma extensão** (o manifesto campo a campo, a API, como achar erros)
-  está em [`docs/EXTENSOES.md`](docs/EXTENSOES.md). Os exemplos: `exemplos/ola/` (o de cima) e
-  `exemplos/destaque/` (com CSS e contagem de visitas).
+  está em [`docs/EXTENSOES.md`](docs/EXTENSOES.md). Os exemplos: `exemplos/ola/` (o de cima),
+  `exemplos/destaque/` (com CSS e contagem de visitas) e `exemplos/links/` (botão, janelinha,
+  opções, mensagens e selo).
 
 ## Janela privada
 
@@ -169,8 +180,8 @@ O que você baixa continua na pasta Downloads (é um arquivo seu, não um rastro
   que o próprio navegador guarda no chaveiro. A sincronização com a conta do Google só existe no
   Chrome; o que vem é o que ele guarda no computador.
 - **Extensões** (menu Extensões): as que vêm com a Jangada (escudos, cookies de terceiros, modo
-  escuro nas páginas) e as instaladas (veja acima). As da loja do Chrome não funcionam: a
-  Jangada não tem a plataforma de extensões do Chrome.
+  escuro nas páginas) e as instaladas (veja acima). As da loja do Chrome não funcionam por
+  inteiro: não há script de fundo nem as APIs de rede, menus e downloads do Chrome.
 
 ## Como usar
 
