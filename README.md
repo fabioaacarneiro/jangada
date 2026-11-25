@@ -75,6 +75,10 @@ pergunta volta.
 - **Área de transferência:** quando um site quer ler o que você copiou (o botão "colar" dele), a
   pergunta aparece numa faixa no alto da página, com as mesmas três respostas. Ctrl+V nunca
   pergunta.
+- **Colar e soltar arquivos:** uma imagem copiada (uma captura de tela, uma figura de outro app)
+  ou arquivos copiados no Arquivos chegam à página como arquivos com Ctrl+V; arquivos arrastados
+  da mesa ou do Arquivos também. É assim que o Telegram, o WhatsApp e o e-mail recebem anexos.
+  (O WebKitGTK sozinho não entrega arquivos à página: quem os lê e entrega é a Jangada.)
 - **Prender o mouse** (jogos, visualizadores 3D): a Jangada permite, e o Esc solta (no Glove ainda
   não prende: veja "O que ainda não funciona").
 - **Captura da tela:** a Jangada não concede.

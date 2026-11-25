@@ -233,8 +233,14 @@ pub fn ligar_soltar(view: &WebView) {
     alvo.connect_accept(|_, drop| drop.drag().is_none() && drop.formats().union_deserialize_types().contains_type(gdk::FileList::static_type()));
     // Os nomes do que vem (lidos assim que o GTK entrega a lista).
     let nomes = |t: &gtk::DropTarget| -> Vec<(String, String)> {
-        let Some(l) = t.value().and_then(|v| v.get::<gdk::FileList>().ok()) else { return Vec::new() };
-        locais(&l).0.iter().map(|p| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), tipo_de(p).to_string())).collect()
+        let v: Vec<(String, String)> = t
+            .value()
+            .and_then(|v| v.get::<gdk::FileList>().ok())
+            .map(|l| locais(&l).0.iter().map(|p| (p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), tipo_de(p).to_string())).collect())
+            .unwrap_or_default();
+        // A lista ainda não chegou (logo ao entrar): um arquivo sem nome, para a página já
+        // saber que vêm arquivos (o Telegram mostra a área de soltar no dragenter).
+        if v.is_empty() { vec![(String::new(), "application/octet-stream".into())] } else { v }
     };
     let escala = |v: &WebView| {
         let z = v.zoom_level();
