@@ -342,6 +342,8 @@ struct Navegador {
     reabrir: bool,
     /// Quando o histórico do menu foi relido.
     hist_lido: Instant,
+    /// The history file as it was when last read (it is read again only when it changes).
+    hist_marca: ajustes::HistoryMark,
     /// O botão vermelho da barra (a janela não tem a barra de título do Glove).
     fechar_janela: bool,
     /// As abas fechadas (para reabrir: Ctrl+Shift+T), da mais velha para a mais nova.
@@ -2495,9 +2497,10 @@ impl App for Navegador {
         self.pagina_de_erro(ui.fonts);
         // O histórico do menu (os últimos 12), relido a cada poucos segundos.
         if self.hist_lido.elapsed() > Duration::from_secs(3) {
-            let todos = ajustes::historico();
-            self.recentes = todos.iter().take(12).cloned().collect();
-            self.recentes_todos = todos;
+            if let Some(todos) = ajustes::history_if_changed(&mut self.hist_marca) {
+                self.recentes = todos.iter().take(12).cloned().collect();
+                self.recentes_todos = todos;
+            }
             self.hist_lido = Instant::now();
             // As abas abertas ficam gravadas (se a Jangada cair, a sessão não se perde).
             self.gravar_sessao();
@@ -2955,6 +2958,7 @@ fn main() -> std::process::ExitCode {
         pergunta: 0,
         reabrir: false,
         hist_lido: Instant::now() - Duration::from_secs(10),
+        hist_marca: None,
         fechar_janela: false,
         fechadas: Vec::new(),
         sessao_anterior: if aj_reabrir { Vec::new() } else { sessao.clone() },

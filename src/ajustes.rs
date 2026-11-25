@@ -287,6 +287,21 @@ pub fn historico() -> Vec<(String, String)> {
     ler_lista("history.tsv")
 }
 
+/// The file's mark (modification time and size): it changes when the history is written.
+pub type HistoryMark = Option<(std::time::SystemTime, u64)>;
+
+/// The history, only when it changed since `mark` (which is updated). Reading the whole
+/// file (up to 2000 visits, often hundreds of KB) every few seconds cost for nothing.
+pub fn history_if_changed(mark: &mut HistoryMark) -> Option<Vec<(String, String)>> {
+    gravar_visitas();
+    let now = std::fs::metadata(pasta().join("history.tsv")).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+    if now.is_some() && now == *mark {
+        return None;
+    }
+    *mark = now;
+    Some(ler_lista("history.tsv"))
+}
+
 /// Uma visita: vai para o topo (sem repetir o endereço), no máximo 2000. A gravação
 /// espera um instante e junta o que chegar: um site que troca o título o tempo todo
 /// (aviso de mensagem nova, contador) regravava o arquivo inteiro a cada troca.
