@@ -10,6 +10,6 @@ Uma extensão de exemplo para a Jangada com tudo o que vai além de um script na
   destacados nas abas abertas (`storage.onChanged`).
 
 Instalar: `jangada --install exemplos/links` (ou pelo link do repositório, em
-Preferências ▸ Instaladas).
+Preferências ▸ Extensões).
 
 O guia de como escrever uma extensão está em [`docs/EXTENSOES.md`](../../docs/EXTENSOES.md).

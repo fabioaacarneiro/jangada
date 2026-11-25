@@ -279,7 +279,6 @@ enum Secao {
     Geral,
     Contas,
     Senhas,
-    Instaladas,
     Busca,
     Privacidade,
     Extensoes,
@@ -413,6 +412,9 @@ struct Navegador {
     /// A janelinha da extensão: o botão em que ela se ancora e onde ela está agora.
     popup_ancora: Rect,
     popup_rect: Option<Rect>,
+    /// A rolagem das Preferências (na aba Extensões) e a altura do conteúdo.
+    prefs_rolagem: f32,
+    prefs_altura: f32,
 }
 
 impl Navegador {
@@ -1815,12 +1817,13 @@ impl Navegador {
         let w = ui.c.w;
         ui.c.fill_rect(0.0, 0.0, w, ui.c.h, &solid(ui.theme.body_a));
         ui.space(10.0);
-        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Contas, tr!("Contas")), (Secao::Senhas, tr!("Senhas")), (Secao::Instaladas, tr!("Instaladas")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
+        let secoes = [(Secao::Geral, tr!("Geral")), (Secao::Contas, tr!("Contas")), (Secao::Senhas, tr!("Senhas")), (Secao::Busca, tr!("Busca")), (Secao::Privacidade, tr!("Privacidade")), (Secao::Extensoes, tr!("Extensões")), (Secao::Avancado, tr!("Avançado"))];
         let nomes: Vec<&str> = secoes.iter().map(|s| s.1).collect();
         let mut i = secoes.iter().position(|s| s.0 == self.secao).unwrap_or(0);
         if ui.tabs(&mut i, &nomes) {
             self.secao = secoes[i].0;
             self.pergunta = 0;
+            self.prefs_rolagem = 0.0;
         }
         ui.space(14.0);
         let antes = self.aj.clone();
@@ -1987,57 +1990,6 @@ impl Navegador {
                     ui.small(&tr!("{} senhas no chaveiro do sistema (também no Acesso às Chaves).", lista.len()));
                 }
             }
-            Secao::Instaladas => {
-                ui.label_ex(tr!("Instalar uma extensão"), 12.0, true, tinta());
-                ui.space(4.0);
-                ui.paragraph(tr!("Uma pasta, um arquivo .zip ou um repositório do GitHub (https://github.com/usuario/repositorio). Antes de instalar, você vê o que ela pede."));
-                ui.space(4.0);
-                ui.horizontal(|ui| {
-                    ui.text_field(&mut self.ext_fonte, 330.0);
-                    let ocupado = self.ext_rx.is_some();
-                    ui.set_active(!ocupado && !self.ext_fonte.trim().is_empty());
-                    if ui.default_button(tr!("Verificar")) {
-                        let origem = self.ext_fonte.trim().to_string();
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        std::thread::spawn(move || {
-                            let _ = tx.send(extensoes::preparar(&origem));
-                        });
-                        self.ext_rx = Some(rx);
-                        self.ext_msg = Some(tr!("Verificando…").into());
-                    }
-                    ui.set_active(true);
-                });
-                if let Some(m) = self.ext_msg.clone() {
-                    ui.small(&m);
-                }
-                ui.space(12.0);
-                ui.label_ex(tr!("Instaladas"), 12.0, true, tinta());
-                ui.space(4.0);
-                let lista = extensoes::listar();
-                if lista.is_empty() {
-                    ui.paragraph(tr!("Nenhuma extensão instalada."));
-                }
-                for e in lista {
-                    ui.push_id(&e.id, |ui| {
-                        ui.horizontal(|ui| {
-                            let mut ativa = e.ativa;
-                            if ui.checkbox(&mut ativa, &format!("{} {}", e.nome, e.versao)) {
-                                extensoes::alternar(&e.id);
-                            }
-                            if e.ativa && e.opcoes.is_some() && ui.small_button(tr!("Opções…")) {
-                                abrir_opcoes(&e);
-                            }
-                            if ui.small_button(tr!("Remover")) {
-                                extensoes::remover(&e.id);
-                                self.ext_msg = Some(tr!("Extensão removida.").into());
-                            }
-                        });
-                        if !e.descricao.is_empty() {
-                            ui.small(&e.descricao);
-                        }
-                    });
-                }
-            }
             Secao::Busca => {
                 ui.label_ex(tr!("Buscador da barra de endereço e da página inicial"), 12.0, true, tinta());
                 let nomes: Vec<String> = ajustes::BUSCADORES.iter().map(|b| b.0.to_string()).collect();
@@ -2073,29 +2025,90 @@ impl Navegador {
                     }
                 });
             }
+            // Tudo das extensões num lugar só: instalar, as instaladas e as que vêm com a
+            // Jangada. Rola quando não cabe (a janela tem tamanho fixo).
             Secao::Extensoes => {
-                ui.label_ex(tr!("Extensões da Jangada"), 12.0, true, tinta());
-                ui.space(6.0);
-                ui.checkbox(&mut self.aj.bloqueador, tr!("Escudos: anúncios e rastreadores"));
-                ui.paragraph(tr!("Com o motor de bloqueio do Brave e as listas EasyList, EasyPrivacy, a portuguesa, a do Peter Lowe e os filtros do uBlock Origin (renovadas toda semana): barra o que carregaria e esconde os espaços de anúncio na página."));
-                let fora = ajustes::escudos_fora().len();
-                if fora > 0 {
-                    ui.horizontal(|ui| {
-                        ui.small(&tr!("Desligados em {} sites.", fora));
-                        if ui.small_button(tr!("Ligar em Todos")) {
-                            ajustes::gravar_escudos_fora(&Default::default());
-                            escudos::recarregar_fora();
+                let (x, y) = ui.cursor();
+                let area = Rect::new(x, y, ui.available_width() + 20.0, ui.c.h - y - 8.0);
+                let (mut rolagem, altura) = (self.prefs_rolagem, self.prefs_altura);
+                self.prefs_altura = ui.scroll_view(area, &mut rolagem, altura, |ui| {
+                    // Uma folga entre o texto e a barra de rolagem.
+                    let largura = ui.available_width() - 14.0;
+                    ui.column(largura, |ui| {
+                        ui.label_ex(tr!("Instalar uma extensão"), 12.0, true, tinta());
+                        ui.space(4.0);
+                        ui.paragraph(tr!("Uma pasta, um arquivo .zip ou um repositório do GitHub (https://github.com/usuario/repositorio). Antes de instalar, você vê o que ela pede."));
+                        ui.space(4.0);
+                        ui.horizontal(|ui| {
+                            ui.text_field(&mut self.ext_fonte, 330.0);
+                            let ocupado = self.ext_rx.is_some();
+                            ui.set_active(!ocupado && !self.ext_fonte.trim().is_empty());
+                            if ui.default_button(tr!("Verificar")) {
+                                let origem = self.ext_fonte.trim().to_string();
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                std::thread::spawn(move || {
+                                    let _ = tx.send(extensoes::preparar(&origem));
+                                });
+                                self.ext_rx = Some(rx);
+                                self.ext_msg = Some(tr!("Verificando…").into());
+                            }
+                            ui.set_active(true);
+                        });
+                        if let Some(m) = self.ext_msg.clone() {
+                            ui.small(&m);
                         }
+                        ui.space(12.0);
+                        ui.label_ex(tr!("Instaladas"), 12.0, true, tinta());
+                        ui.space(4.0);
+                        let lista = extensoes::listar();
+                        if lista.is_empty() {
+                            ui.paragraph(tr!("Nenhuma extensão instalada."));
+                        }
+                        for e in lista {
+                            ui.push_id(&e.id, |ui| {
+                                ui.horizontal(|ui| {
+                                    let mut ativa = e.ativa;
+                                    if ui.checkbox(&mut ativa, &format!("{} {}", e.nome, e.versao)) {
+                                        extensoes::alternar(&e.id);
+                                    }
+                                    if e.ativa && e.opcoes.is_some() && ui.small_button(tr!("Opções…")) {
+                                        abrir_opcoes(&e);
+                                    }
+                                    if ui.small_button(tr!("Remover")) {
+                                        extensoes::remover(&e.id);
+                                        self.ext_msg = Some(tr!("Extensão removida.").into());
+                                    }
+                                });
+                                if !e.descricao.is_empty() {
+                                    ui.small(&e.descricao);
+                                }
+                            });
+                        }
+                        ui.space(18.0);
+                        ui.label_ex(tr!("Extensões da Jangada"), 12.0, true, tinta());
+                        ui.space(6.0);
+                        ui.checkbox(&mut self.aj.bloqueador, tr!("Escudos: anúncios e rastreadores"));
+                        ui.paragraph(tr!("Com o motor de bloqueio do Brave e as listas EasyList, EasyPrivacy, a portuguesa, a do Peter Lowe e os filtros do uBlock Origin (renovadas toda semana): barra o que carregaria e esconde os espaços de anúncio na página."));
+                        let fora = ajustes::escudos_fora().len();
+                        if fora > 0 {
+                            ui.horizontal(|ui| {
+                                ui.small(&tr!("Desligados em {} sites.", fora));
+                                if ui.small_button(tr!("Ligar em Todos")) {
+                                    ajustes::gravar_escudos_fora(&Default::default());
+                                    escudos::recarregar_fora();
+                                }
+                            });
+                        }
+                        ui.space(6.0);
+                        ui.checkbox(&mut self.aj.cookies_terceiros, tr!("Barrar cookies de terceiros"));
+                        ui.paragraph(tr!("Os cookies que seguem você de site em site (os de propaganda) ficam de fora."));
+                        ui.space(6.0);
+                        ui.checkbox(&mut self.aj.escuro_nas_paginas, tr!("Modo escuro nas páginas"));
+                        ui.paragraph(tr!("Escurece as páginas que não têm um modo escuro próprio (vale ao reabrir a Jangada)."));
+                        ui.space(8.0);
                     });
-                }
-                ui.space(6.0);
-                ui.checkbox(&mut self.aj.cookies_terceiros, tr!("Barrar cookies de terceiros"));
-                ui.paragraph(tr!("Os cookies que seguem você de site em site (os de propaganda) ficam de fora."));
-                ui.space(6.0);
-                ui.checkbox(&mut self.aj.escuro_nas_paginas, tr!("Modo escuro nas páginas"));
-                ui.paragraph(tr!("Escurece as páginas que não têm um modo escuro próprio (vale ao reabrir a Jangada)."));
-                ui.space(10.0);
-                ui.paragraph(tr!("As principais vêm prontas aqui. Extensões no formato do Chrome (scripts nas páginas e armazenamento) se instalam na aba Instaladas."));
+                });
+                self.prefs_rolagem = rolagem;
             }
             Secao::Avancado => {
                 ui.checkbox(&mut self.aj.endereco_completo, tr!("Mostrar o endereço completo na barra"));
@@ -3404,6 +3417,8 @@ fn main() -> std::process::ExitCode {
         ext_icones_de: (0, 0),
         popup_ancora: Rect::new(0.0, 0.0, 0.0, 0.0),
         popup_rect: None,
+        prefs_rolagem: 0.0,
+        prefs_altura: 0.0,
     };
     if !urls.is_empty() {
         for u in &urls {

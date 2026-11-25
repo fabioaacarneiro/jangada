@@ -130,7 +130,7 @@ jangada --help                           # todas as opções
 ```
 
 Também dá para instalar, ligar, desligar, abrir as opções e remover em Preferências ▸
-**Instaladas**. Nada entra sem a sua confirmação.
+**Extensões** (a mesma aba tem as que vêm com a Jangada). Nada entra sem a sua confirmação.
 
 - **Na barra:** cada extensão com `action` ganha um botão à esquerda dos escudos; o clique abre a
   janelinha dela embaixo do botão, no tamanho que a página pede (até 800 × 600). Clicar fora, Esc
