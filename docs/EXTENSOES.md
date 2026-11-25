@@ -128,7 +128,7 @@ Desenvolvedor da própria janelinha.
 ```
 
 (ou `"options_ui": { "page": "opcoes.html" }`). Ela abre numa aba: pelo menu da peça, por
-Preferências ▸ Instaladas (o botão **Opções…**) ou por `jangada.runtime.openOptionsPage()`. Se já
+Preferências ▸ Extensões (o botão **Opções…**) ou por `jangada.runtime.openOptionsPage()`. Se já
 estiver aberta, a Jangada vai para a aba dela.
 
 ## Os endereços da extensão
@@ -337,7 +337,7 @@ jangada --extensions                      # lista: identificador, nome, versão,
 jangada --remove IDENTIFICADOR
 ```
 
-Pela janela: **Preferências ▸ Instaladas**. Digite a pasta, o `.zip` ou o link, clique em
+Pela janela: **Preferências ▸ Extensões**. Digite a pasta, o `.zip` ou o link, clique em
 Verificar, confira o que a extensão pede e confirme. A mesma tela liga, desliga, abre as opções e
 remove.
 
@@ -354,7 +354,7 @@ remove.
 - Um erro de escrita num arquivo não impede os outros arquivos (nem as outras extensões) de rodar.
 - Para ver o que está guardado, abra o `storage.json` da extensão.
 - Se nada acontece, confira o `matches` (o esquema `http`/`https`, o `/*` no fim) e se a extensão
-  está ligada em Preferências ▸ Instaladas.
+  está ligada em Preferências ▸ Extensões.
 
 ## Segurança
 
