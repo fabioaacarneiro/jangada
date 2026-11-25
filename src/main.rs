@@ -6,6 +6,7 @@
 //!   jangada [ENDEREÇO…]   abre os endereços (numa janela que já esteja aberta, se houver)
 
 mod ajustes;
+mod arquivos;
 mod chaveiro;
 mod escudos;
 mod extensoes;
@@ -722,7 +723,11 @@ impl Navegador {
             }
             "Ctrl+C" if pagina => editar("Copy"),
             "Ctrl+X" if pagina => editar("Cut"),
-            "Ctrl+V" if pagina => editar("Paste"),
+            "Ctrl+V" if pagina => {
+                if let Some(v) = &b {
+                    arquivos::colar_pelo_menu(v);
+                }
+            }
             "Ctrl+A" if pagina => editar("SelectAll"),
             "Ctrl+Z" if pagina => editar("Undo"),
             "Ctrl+Shift+Z" | "Ctrl+Y" if pagina => editar("Redo"),
@@ -1464,7 +1469,11 @@ impl Navegador {
             }
             "ctx-recortar" => editar("Cut"),
             "ctx-copiar" => editar("Copy"),
-            "ctx-colar" => editar("Paste"),
+            "ctx-colar" => {
+                if let Some(v) = self.view() {
+                    arquivos::colar_pelo_menu(&v);
+                }
+            }
             "ctx-inspecionar" => self.ferramentas(),
             "ctx-buscar" => {
                 let u = format!("{}{}", self.aj.busca_url(), codificar(&c.selection));
@@ -2314,6 +2323,11 @@ impl App for Navegador {
             combo,
             "Ctrl+T" | "Ctrl+W" | "Ctrl+Tab" | "Ctrl+Shift+Tab" | "Ctrl+R" | "F5" | "Ctrl+Shift+R" | "Ctrl+," | "Ctrl+comma" | "Ctrl+P" | "Ctrl+Shift+T" | "Ctrl+H" | "Ctrl+J" | "Ctrl+Shift+N" | "Ctrl+U" | "Ctrl+Shift+I" | "Ctrl+L" | "F6" | "Ctrl+F" | "Ctrl+D" | "Ctrl+Shift+B" | "Alt+Left" | "Alt+Right" | "Alt+Home" | "Ctrl+=" | "Ctrl++" | "Ctrl+Shift+=" | "Ctrl+plus" | "Ctrl+equal" | "Ctrl+-" | "Ctrl+minus" | "Ctrl+0"
         ) || (combo == "Escape" && self.achar.is_some());
+        // Colar: uma imagem ou arquivos copiados chegam à página como arquivos (o motor
+        // sozinho não os entrega; o Telegram, o WhatsApp etc. não recebiam nada).
+        if combo == "Ctrl+V" {
+            return self.view().is_some_and(|v| arquivos::colar(&v));
+        }
         if da_jangada {
             self.atalho(combo, false);
         }

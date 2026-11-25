@@ -374,6 +374,8 @@ fn preparar(view: WebView, url: &str) -> Shared {
 
 /// Os sinais do motor para a aba.
 fn ligar(p: &Shared, view: &WebView) {
+    // Arquivos soltos de fora chegam à página como arquivos.
+    crate::arquivos::ligar_soltar(view);
     let fraco = Rc::downgrade(p);
     // Mexe na página (se ela ainda existe e não está ocupada) e pede um quadro.
     let com_pagina = {

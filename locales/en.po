@@ -711,3 +711,6 @@ msgstr "Question from the page"
 
 msgid "A página {} pergunta:"
 msgstr "The page {} asks:"
+
+msgid "imagem"
+msgstr "image"
