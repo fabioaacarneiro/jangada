@@ -245,7 +245,7 @@ Os pacotes saem na release de cada versão (`github.com/fabioaacarneiro/jangada/
   `sudo dnf install jangada` pelo repositório do Glove.
 - **Arch:** `jangada-VERSÃO-1-x86_64.pkg.tar.zst` (`sudo pacman -U ./jangada-*.pkg.tar.zst`), ou
   `sudo pacman -S jangada` pelo repositório do Glove.
-- **Slackware -current:** `jangada-VERSÃO-x86_64-1.tgz` (`sudo installpkg ./jangada-*.tgz`). O
+- **Slackware -current:** `jangada-VERSÃO-x86_64-1_glove.tgz` (`sudo installpkg ./jangada-*.tgz`). O
   Slackware não traz o WebKitGTK: ele vem compilado dentro do pacote (em `/usr/lib/jangada/motor`;
   a Jangada sobe a versão dele a cada correção). O resto (GTK 4, GStreamer, libsoup 3) é do
   Slackware; a descrição do pacote lista.
@@ -268,7 +268,7 @@ cargo build --release         # target/release/jangada
 ./empacotar.sh                # pacotes/jangada_VERSÃO_amd64.deb
 ./empacotar-rpm.sh            # pacotes/jangada-VERSÃO-1.x86_64.rpm (precisa do rpmbuild)
 ./empacotar-arch.sh           # pacotes/jangada-VERSÃO-1-x86_64.pkg.tar.zst
-./empacotar-slackware.sh      # pacotes/jangada-VERSÃO-x86_64-1.tgz
+./empacotar-slackware.sh      # pacotes/jangada-VERSÃO-x86_64-1_glove.tgz
 ```
 A árvore dos arquivos vem sempre de `preparar.sh`, a mesma para todos os formatos. O `ci/` tem os
 scripts que compilam e conferem cada distribuição em contêiner (é o que a CI roda).

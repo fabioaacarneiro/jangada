@@ -27,6 +27,8 @@ jangada: https://github.com/fabioaacarneiro/jangada
 jangada:
 DESC
 mkdir -p pacotes
-saida="$PWD/pacotes/jangada-$v-x86_64-1.tgz"
+# A marca dos pacotes de terceiros (nome-versão-arquitetura-construção_marca), como o
+# slackpkg+ espera.
+saida="$PWD/pacotes/jangada-$v-x86_64-1_glove.tgz"
 tar -czf "$saida" --owner=0 --group=0 --numeric-owner -C "$raiz" .
 echo "==> Pacote: $saida"
