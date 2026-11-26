@@ -2098,13 +2098,13 @@ impl Navegador {
                                 ui.horizontal(|ui| {
                                     let mut ativa = e.ativa;
                                     if ui.checkbox(&mut ativa, &format!("{} {}", e.nome, e.versao)) {
-                                        extensoes::alternar(&e.id);
+                                        extensoes::alternar(&e.id); motor::extensoes_mudaram();
                                     }
                                     if e.ativa && e.opcoes.is_some() && ui.small_button(tr!("Opções…")) {
                                         abrir_opcoes(&e);
                                     }
                                     if ui.small_button(tr!("Remover")) {
-                                        extensoes::remover(&e.id);
+                                        extensoes::remover(&e.id); motor::extensoes_mudaram();
                                         self.ext_msg = Some(tr!("Extensão removida.").into());
                                     }
                                 });
@@ -2183,6 +2183,7 @@ impl Navegador {
                         Ok(i) => tr!("Instalada: {}.", i.nome).to_string(),
                         Err(err) => err,
                     });
+                    motor::extensoes_mudaram();
                     self.ext_confirmar = None;
                     self.ext_fonte.clear();
                 }
@@ -3303,7 +3304,7 @@ fn main() -> std::process::ExitCode {
         }
         Some("--remove") => {
             let id = args.get(2).cloned().unwrap_or_default();
-            extensoes::remover(&id);
+            extensoes::remover(&id); motor::extensoes_mudaram();
             println!("{id} removida.");
             return 0.into();
         }

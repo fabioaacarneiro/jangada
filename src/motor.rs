@@ -146,6 +146,9 @@ thread_local! {
     pub static AVISOS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Os downloads desta vez (a janela Downloads), do mais velho para o mais novo.
     pub static DOWNLOADS: RefCell<Vec<Baixado>> = const { RefCell::new(Vec::new()) };
+    /// Os scripts `document_start` das extensões postos em cada aba (para tirar e pôr de
+    /// novo quando as extensões mudam).
+    static INICIO: RefCell<Vec<(glib::WeakRef<WebView>, Vec<webkit6::UserScript>)>> = const { RefCell::new(Vec::new()) };
     /// A página virou PDF para imprimir: o arquivo (a Jangada abre a folha Imprimir).
     pub static IMPRIMIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     /// Mudou algo nos downloads (a janela redesenha).
@@ -411,7 +414,48 @@ pub fn nova_aba(url: &str, relacionada: Option<&WebView>) -> Option<Shared> {
         }
         b.build()
     })?;
+    extensoes_no_inicio(&view);
     Some(preparar(view, url))
+}
+
+/// Os scripts das extensões que pedem o começo do documento (`run_at: document_start`,
+/// como os bloqueadores de anúncio): entram em toda página da aba antes dos scripts dela,
+/// cada um no mundo da extensão e só nas páginas que casam com a regra. Os que a aba já
+/// tinha saem antes (a lista de extensões pode ter mudado).
+pub fn extensoes_no_inicio(view: &WebView) {
+    let Some(ucm) = view.user_content_manager() else { return };
+    let velhos = INICIO.with(|l| {
+        let mut l = l.borrow_mut();
+        l.retain(|(w, _)| w.upgrade().is_some());
+        l.iter().position(|(w, _)| w.upgrade().as_ref() == Some(view)).map(|i| l.remove(i).1).unwrap_or_default()
+    });
+    for s in &velhos {
+        ucm.remove_script(s);
+    }
+    let mut novos = Vec::new();
+    for (ext, mundo, codigo) in extensoes::scripts_no_inicio() {
+        if ucm.register_script_message_handler(&mundo, Some(&mundo)) {
+            let (v, e) = (view.clone(), ext.clone());
+            ucm.connect_script_message_received(Some(&mundo), move |_, valor| {
+                ponte::pedido(ponte::Origem::Conteudo { view: v.clone(), ext: e.clone() }, &valor.to_str());
+            });
+        }
+        let s = webkit6::UserScript::for_world(&codigo, UserContentInjectedFrames::TopFrame, webkit6::UserScriptInjectionTime::Start, &mundo, &[], &[]);
+        ucm.add_script(&s);
+        novos.push(s);
+    }
+    if !novos.is_empty() {
+        INICIO.with(|l| l.borrow_mut().push((view.downgrade(), novos)));
+    }
+}
+
+/// As extensões mudaram (instalada, ligada, desligada, removida): os scripts do começo
+/// do documento de todas as abas abertas são refeitos (valem a partir da próxima página).
+pub fn extensoes_mudaram() {
+    for p in abas_abertas() {
+        let v = p.borrow().view.clone();
+        extensoes_no_inicio(&v);
+    }
 }
 
 /// Uma aba que só carrega o endereço quando for escolhida (`carregar_adiada`): reabrir
@@ -709,6 +753,7 @@ fn ligar(p: &Shared, view: &WebView) {
                 let ucm = conteudo(m);
                 WebView::builder().related_view(v).user_content_manager(&ucm).settings(&m.ajustes).build()
             })?;
+            extensoes_no_inicio(&nova);
             // A nova divide o processo com esta.
             parentes.set(true);
             let fundo = acao.mouse_button() == 2;
@@ -1034,6 +1079,7 @@ fn scripts_das_extensoes(view: &WebView, url: &str) {
                 p.extensoes.push(ext.clone());
             }
         }
+        // (Vazia: só regras `document_start`, que já entraram no começo do documento.)
         for js in partes {
             view.evaluate_javascript(&js, Some(&mundo), Some(url), None::<&gio::Cancellable>, |_| {});
         }

@@ -89,6 +89,10 @@ pub struct Regra {
     pub matches: Vec<String>,
     pub js: Vec<String>,
     pub css: Vec<String>,
+    /// `"run_at": "document_start"`: entra no começo do documento, antes dos scripts da
+    /// página (os bloqueadores de anúncio precisam disso). As outras entram com a página
+    /// pronta, como o `document_idle`, o padrão do Chrome.
+    pub inicio: bool,
 }
 
 impl Extensao {
@@ -301,7 +305,8 @@ pub fn ler(pasta: &Path) -> Result<Extensao, String> {
         for f in js.iter().chain(css.iter()) {
             existe(f)?;
         }
-        regras.push(Regra { matches: lista("matches"), js, css });
+        let inicio = r["run_at"].as_str() == Some("document_start");
+        regras.push(Regra { matches: lista("matches"), js, css, inicio });
     }
     // O botão na barra (o `browser_action` do Manifest V2 também vale, para quem traz um
     // manifesto antigo com só a versão trocada).
@@ -764,12 +769,82 @@ pub fn mundo_de(id: &str) -> String {
 /// ordem do manifesto. Cada pedaço é avaliado à parte (um erro de escrita num script não
 /// leva os outros), e cada script recebe a API da própria extensão, como `jangada`, `chrome`
 /// e `browser`.
+/// Os scripts das regras `document_start` de cada extensão ativa, para entrar no começo
+/// de todo documento da aba: (extensão, mundo, código). Cada regra vem com o teste do
+/// endereço (os padrões do `matches` em expressões regulares), e a API só é montada quando
+/// a página casa: nas outras, o script não faz nada.
+pub fn scripts_no_inicio() -> Vec<(String, String, String)> {
+    let mut saida = Vec::new();
+    for e in listar().into_iter().filter(|e| e.ativa) {
+        let mundo = mundo_de(&e.id);
+        let api = api_js(&e, &mundo, false);
+        let mut corpo: Vec<String> = Vec::new();
+        for r in e.regras.iter().filter(|r| r.inicio) {
+            let mut partes = String::new();
+            for c in &r.css {
+                if let Some(t) = arquivo(&e.pasta, c).and_then(|p| std::fs::read_to_string(p).ok()) {
+                    partes.push_str(&format!("(function(){{var s=document.createElement('style');s.textContent={};(document.head||document.documentElement).appendChild(s)}})();", js_str(&t)));
+                }
+            }
+            for j in &r.js {
+                if let Some(t) = arquivo(&e.pasta, j).and_then(|p| std::fs::read_to_string(p).ok()) {
+                    partes.push_str(&format!(
+                        "(function(jangada){{var chrome=jangada,browser=jangada;try{{\n{t}\n}}catch(e){{console.error({}+': '+(e&&e.stack||e))}}}})(window.__jangadaApi);",
+                        js_str(&format!("{} ({j})", e.nome))
+                    ));
+                }
+            }
+            let padroes: Vec<String> = r.matches.iter().filter_map(|m| regex_do_padrao(m)).map(|s| js_str(&s)).collect();
+            if partes.is_empty() || padroes.is_empty() {
+                continue;
+            }
+            corpo.push(format!("if([{}].some(function(s){{return new RegExp(s).test(location.href)}})){{{api}{partes}}}", padroes.join(",")));
+        }
+        if !corpo.is_empty() {
+            saida.push((e.id.clone(), mundo, corpo.join("\n")));
+        }
+    }
+    saida
+}
+
+/// Um padrão do `matches` (como `*://*.exemplo.com/*`) em expressão regular, com o mesmo
+/// sentido de `casa`: o esquema `*` vale por http e https, `*.` pede o site e os
+/// subdomínios, a porta não entra no padrão. (Contribuição de darkstarfire.)
+fn regex_do_padrao(padrao: &str) -> Option<String> {
+    fn escapa(t: &str) -> String {
+        t.chars().map(|c| if "\\^$.|?*+()[]{}".contains(c) { format!("\\{c}") } else { c.to_string() }).collect()
+    }
+    if padrao == "<all_urls>" {
+        return Some(r"^https?://".to_string());
+    }
+    let (esq, resto) = padrao.split_once("://")?;
+    let esq_re = if esq == "*" { "https?".to_string() } else { escapa(esq) };
+    let (host, caminho) = resto.split_once('/').map(|(h, c)| (h, format!("/{c}"))).unwrap_or((resto, "/".into()));
+    let host_re = if host == "*" {
+        r"[^/?#:]+".to_string()
+    } else if let Some(sub) = host.strip_prefix("*.") {
+        format!(r"(?:[^/?#:]+\.)?{}", escapa(sub))
+    } else {
+        escapa(host)
+    };
+    let caminho_re = caminho.split('*').map(escapa).collect::<Vec<_>>().join(".*");
+    Some(format!(r"^{esq_re}://{host_re}(?::\d+)?{caminho_re}(?:#.*)?$"))
+}
+
+/// Os scripts das regras que entram com a página pronta, para `url`: (extensão, mundo,
+/// pedaços). Uma extensão com só regras `document_start` que casam vem com a lista vazia
+/// (os scripts dela já entraram; a aba só fica sabendo que a usa).
 pub fn scripts_para(url: &str) -> Vec<(String, String, Vec<String>)> {
     let mut saida = Vec::new();
     for e in listar().into_iter().filter(|e| e.ativa) {
         let mut partes = Vec::new();
+        let mut usa = false;
         for r in &e.regras {
             if !r.matches.iter().any(|m| casa(m, url)) {
+                continue;
+            }
+            usa = true;
+            if r.inicio {
                 continue;
             }
             for c in &r.css {
@@ -787,6 +862,9 @@ pub fn scripts_para(url: &str) -> Vec<(String, String, Vec<String>)> {
             }
         }
         if partes.is_empty() {
+            if usa {
+                saida.push((e.id.clone(), mundo_de(&e.id), Vec::new()));
+            }
             continue;
         }
         partes.insert(0, api_js(&e, &mundo_de(&e.id), false));
@@ -1366,5 +1444,30 @@ mod tests {
         assert_eq!(tipo_do_arquivo(Path::new("a/b.JS")), "text/javascript");
         assert_eq!(decodificar("a%20b%2"), "a b%2");
         assert_eq!(decodificar("%é%"), "%é%");
+    }
+
+    #[test]
+    fn padrao_vira_regex_como_casa() {
+        let casa_regex = |p: &str, u: &str| regex_do_padrao(p).is_some_and(|r| regex::Regex::new(&r).unwrap().is_match(u));
+        for (p, u, esperado) in [
+            ("*://*.youtube.com/*", "https://www.youtube.com/watch?v=1", true),
+            ("*://*.youtube.com/*", "http://youtube.com:8080/", true),
+            ("*://*.youtube.com/*", "https://youtube.com.evil.net/", false),
+            ("*://*.youtube.com/*", "https://evilyoutube.com/", false),
+            ("https://example.com/docs/*", "https://example.com/docs/a#x", true),
+            ("https://example.com/docs/*", "https://example.com/outro", false),
+            ("<all_urls>", "https://a.b/c", true),
+            ("<all_urls>", "jangada-extension://x/y", false),
+        ] {
+            assert_eq!(casa_regex(p, u), esperado, "{p} x {u}");
+            assert_eq!(casa(p, u), esperado, "casa {p} x {u}");
+        }
+    }
+
+    #[test]
+    fn regra_do_comeco_do_documento() {
+        let m: serde_json::Value = serde_json::from_str(r#"{"content_scripts":[{"matches":["*://*.youtube.com/*"],"js":["a.js"],"run_at":"document_start"},{"matches":["<all_urls>"],"js":["b.js"]}]}"#).unwrap();
+        let regras: Vec<bool> = m["content_scripts"].as_array().unwrap().iter().map(|r| r["run_at"].as_str() == Some("document_start")).collect();
+        assert_eq!(regras, [true, false]);
     }
 }

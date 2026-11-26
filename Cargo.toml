@@ -2,7 +2,7 @@
 name = "jangada"
 # Jangada, o navegador do Glove OS: o motor do WebKitGTK (o do sistema, atualizado pela
 # distribuição) dentro de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
-version = "2.1.5"
+version = "2.1.6"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
@@ -33,6 +33,10 @@ sha1 = "0.10"
 # O motor de bloqueio do Brave lê as listas (EasyList etc.) e as converte para os filtros
 # nativos do WebKit (o formato do Safari: barrados pelo próprio motor, sem script na página).
 adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "content-blocking"] }
+
+[dev-dependencies]
+# Só para o teste de padrões (regex_do_padrao): confere a conversão para expressão regular.
+regex = "1"
 
 [profile.release]
 opt-level = 3
