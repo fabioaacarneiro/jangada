@@ -723,3 +723,9 @@ msgstr "{} Options…"
 
 msgid "Nenhuma extensão ligada"
 msgstr "No extensions turned on"
+
+msgid "Fixar na barra"
+msgstr "Pin to Toolbar"
+
+msgid "Tirar da barra"
+msgstr "Unpin from Toolbar"

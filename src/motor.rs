@@ -319,14 +319,16 @@ pub const AGENTE: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 (
 const ESCURO: &str = "html{filter:invert(0.92) hue-rotate(180deg)!important;background:#fff!important}\
 img,video,picture,canvas,iframe,embed,object,svg image,[style*=\"background-image\"]{filter:invert(1) hue-rotate(180deg)!important}";
 
-/// Barrar (ou não) os cookies de terceiros, e a prevenção de rastreamento do WebKit (a do
-/// Safari: os rastreadores entre sites perdem os cookies).
+/// Barrar (ou não) os cookies de terceiros. A prevenção de rastreamento do WebKit (a do
+/// Safari) fica desligada: ela apagava os dados dos sites que ela classifica sozinha, até de
+/// um usado todo dia (o WhatsApp Web perdia a sessão, e o celular continuava mostrando o
+/// aparelho conectado). Os cookies de terceiros barrados já cortam o rastreamento entre sites.
 pub fn aplicar_cookies(barrar: bool) {
     com(|m| {
         if let Some(cm) = m.sessao.cookie_manager() {
             cm.set_accept_policy(if barrar { CookieAcceptPolicy::NoThirdParty } else { CookieAcceptPolicy::Always });
         }
-        m.sessao.set_itp_enabled(barrar);
+        m.sessao.set_itp_enabled(false);
     });
 }
 

@@ -437,6 +437,11 @@ struct Navegador {
     /// escala) com que foram feitos.
     ext_botoes: Vec<(String, Rect)>,
     ext_menu_rect: Option<Rect>,
+    /// The little window of the puzzle piece: the extensions installed, to open and to pin
+    /// to the bar.
+    ext_painel: bool,
+    /// The extensions pinned to the bar (read once; changed by the pin).
+    ext_fixadas: Option<Vec<String>>,
     ext_icones: std::collections::HashMap<String, Option<Canvas>>,
     ext_icones_de: (u64, u32),
     /// A janelinha da extensão: o botão em que ela se ancora e onde ela está agora.
@@ -2403,19 +2408,25 @@ impl Navegador {
         // A peça: todas as extensões, as opções delas e o gerenciador.
         let r = Rect::new(dir - 28.0, by, 28.0, 26.0);
         let h = ui.hit(r);
-        if h.hover {
-            ui.c.fill(rrect(r.x, r.y, r.w, r.h, 6.0), &solid(rgba(0, 0, 0, if h.down { 34 } else { 18 })));
+        if h.hover || self.ext_painel {
+            ui.c.fill(rrect(r.x, r.y, r.w, r.h, 6.0), &solid(rgba(0, 0, 0, if h.down || self.ext_painel { 34 } else { 18 })));
         }
         let cor = cor_glifo(ui, 1.0);
         sem_troca(ui.c, |c| peca(c, r.x + r.w / 2.0, r.y + r.h / 2.0, cor));
-        ui.tooltip(r, tr!("Extensões"));
+        if !self.ext_painel {
+            ui.tooltip(r, tr!("Extensões"));
+        }
         if h.clicked {
-            ui.context_menu((r.x, r.y + r.h + 2.0), &itens_das_extensoes().into_iter().chain([MenuItem::new("ext-gerenciar", tr!("Gerenciar Extensões…"), "")]).collect::<Vec<_>>());
+            self.ext_painel = !self.ext_painel;
+            if self.ext_painel {
+                self.fechar_popup();
+            }
         }
         self.ext_menu_rect = Some(r);
         dir -= 32.0;
-        // Os botões: na ordem da lista, da esquerda para a direita.
-        let com_acao: Vec<&extensoes::Extensao> = lista.iter().filter(|e| e.acao.is_some()).collect();
+        // Os botões das fixadas na barra: na ordem da lista, da esquerda para a direita.
+        let fixadas = self.ext_fixadas.get_or_insert_with(extensoes::fixadas).clone();
+        let com_acao: Vec<&extensoes::Extensao> = lista.iter().filter(|e| e.acao.is_some() && fixadas.contains(&e.id)).collect();
         let cabem = (((dir - limite) / 30.0).floor().max(0.0) as usize).min(6);
         for e in com_acao.iter().take(cabem).rev() {
             let r = Rect::new(dir - 28.0, by, 28.0, 26.0);
@@ -2426,20 +2437,13 @@ impl Navegador {
         dir
     }
 
-    /// O botão de uma extensão: o ícone, o selo (`setBadgeText`) e a dica.
-    fn botao_extensao(&mut self, ui: &mut Ui, e: &extensoes::Extensao, r: Rect) {
-        let est = ponte::estado(&e.id);
-        let aberta = ponte::POPUP.with(|p| p.borrow().as_ref().is_some_and(|p| p.ext == e.id));
-        let h = ui.hit(r);
-        if (h.hover && !est.desligado) || aberta {
-            ui.c.fill(rrect(r.x, r.y, r.w, r.h, 6.0), &solid(rgba(0, 0, 0, if h.down || aberta { 34 } else { 18 })));
-        }
+    /// The icon of an extension (16 points), made once.
+    fn icone_ext(&mut self, ui: &mut Ui, e: &extensoes::Extensao, ix: f32, iy: f32) {
         if !self.ext_icones.contains_key(&e.id) {
             let px = (16.0 * ui.c.scale).ceil() as u32;
             let ic = icone_de_arquivo(e.icone(px), ui.c.scale);
             self.ext_icones.insert(e.id.clone(), ic);
         }
-        let (ix, iy) = (r.x + (r.w - 16.0) / 2.0, r.y + (r.h - 16.0) / 2.0);
         let antes = std::mem::replace(&mut ui.c.dark_remap, false);
         match self.ext_icones.get(&e.id) {
             Some(Some(ic)) => ui.c.draw_canvas(ic, ix, iy),
@@ -2451,6 +2455,119 @@ impl Navegador {
                 ui.fonts.draw(ui.c, &l, ix + (16.0 - lw) / 2.0, iy + 12.0, 10.0, true, Color::WHITE);
             }
         }
+        ui.c.dark_remap = antes;
+    }
+
+    /// The little window of the puzzle piece, under it (over the page): each extension
+    /// installed with its icon and name (a click opens it, as its button does), the options
+    /// and the pin that puts its button on the bar; and Manage Extensions.
+    fn painel_extensoes(&mut self, ui: &mut Ui) {
+        let Some(peca_r) = self.ext_menu_rect.filter(|_| self.ext_painel) else {
+            self.ext_painel = false;
+            return;
+        };
+        let lista: Vec<extensoes::Extensao> = extensoes::listar().into_iter().filter(|e| e.ativa).collect();
+        let fixadas = self.ext_fixadas.get_or_insert_with(extensoes::fixadas).clone();
+        const W: f32 = 300.0;
+        const LINHA: f32 = 34.0;
+        let n = lista.len().max(1) as f32;
+        let h = 34.0 + n * LINHA + 10.0 + 30.0 + 6.0;
+        let x = (peca_r.x + peca_r.w - W).max(8.0);
+        let r = Rect::new(x, peca_r.y + peca_r.h + 4.0, W, h);
+        let escuro = ui.theme.dark;
+        ui.c.fill(rrect(r.x + 1.0, r.y + 3.0, r.w, r.h, 10.0), &solid(rgba(0, 0, 0, 40)));
+        ui.c.fill(rrect(r.x, r.y, r.w, r.h, 10.0), &solid(if escuro { rgba(44, 44, 48, 252) } else { rgba(252, 252, 254, 252) }));
+        ui.c.stroke(rrect(r.x + 0.5, r.y + 0.5, r.w - 1.0, r.h - 1.0, 10.0), &solid(rgba(150, 150, 158, 200)), 1.0);
+        ui.fonts.draw(ui.c, tr!("Extensões"), r.x + 14.0, r.y + 22.0, 13.0, true, tinta());
+        let mut y = r.y + 34.0;
+        let mut fechar = false;
+        if lista.is_empty() {
+            ui.fonts.draw(ui.c, tr!("Nenhuma extensão ligada"), r.x + 14.0, y + 21.0, 12.0, false, rgba(140, 140, 146, 255));
+            y += LINHA;
+        }
+        for e in &lista {
+            let linha = Rect::new(r.x + 6.0, y, r.w - 12.0, LINHA - 2.0);
+            let pino = Rect::new(r.x + r.w - 40.0, y + 4.0, 26.0, 26.0);
+            let opcoes = Rect::new(r.x + r.w - 68.0, y + 4.0, 26.0, 26.0);
+            let tem_opcoes = e.opcoes.is_some();
+            // The name opens it (only the part out of the small buttons).
+            let nome_r = Rect::new(linha.x, linha.y, if tem_opcoes { opcoes.x } else { pino.x } - linha.x - 2.0, linha.h);
+            let hn = ui.hit(nome_r);
+            if hn.hover {
+                ui.c.fill(rrect(linha.x, linha.y, linha.w, linha.h, 6.0), &solid(rgba(0, 0, 0, if hn.down { 30 } else { 16 })));
+            }
+            self.icone_ext(ui, e, r.x + 16.0, y + 8.0);
+            let nome = ui.fonts.ellipsize(&e.nome, 13.0, false, nome_r.w - 42.0);
+            ui.fonts.draw(ui.c, &nome, r.x + 42.0, y + 21.0, 13.0, false, if e.acao.is_some() { tinta() } else { rgba(140, 140, 146, 255) });
+            if hn.clicked && e.acao.is_some() {
+                self.clicar_extensao(&e.id, peca_r);
+                fechar = true;
+            }
+            if tem_opcoes {
+                let ho = ui.hit(opcoes);
+                if ho.hover {
+                    ui.c.fill(rrect(opcoes.x, opcoes.y, opcoes.w, opcoes.h, 6.0), &solid(rgba(0, 0, 0, if ho.down { 34 } else { 18 })));
+                }
+                let cor = cor_glifo(ui, 0.85);
+                sem_troca(ui.c, |c| engrenagem(c, opcoes.x + 13.0, opcoes.y + 13.0, cor));
+                ui.tooltip(opcoes, &tr!("Opções de {}…", e.nome));
+                if ho.clicked {
+                    abrir_opcoes(e);
+                    fechar = true;
+                }
+            }
+            if e.acao.is_some() {
+                let fixada = fixadas.contains(&e.id);
+                let hp = ui.hit(pino);
+                if hp.hover {
+                    ui.c.fill(rrect(pino.x, pino.y, pino.w, pino.h, 6.0), &solid(rgba(0, 0, 0, if hp.down { 34 } else { 18 })));
+                }
+                let cor = if fixada { ui.theme.accent } else { cor_glifo(ui, 0.7) };
+                sem_troca(ui.c, |c| alfinete(c, pino.x + 13.0, pino.y + 13.0, cor, fixada));
+                ui.tooltip(pino, if fixada { tr!("Tirar da barra") } else { tr!("Fixar na barra") });
+                if hp.clicked {
+                    self.ext_fixadas = Some(extensoes::fixar(&e.id, !fixada));
+                    self.mudou = true;
+                }
+            }
+            y += LINHA;
+        }
+        y += 4.0;
+        ui.c.hline(r.x + 10.0, y, r.w - 20.0, rgba(150, 150, 158, 120));
+        y += 4.0;
+        let gerenciar = Rect::new(r.x + 6.0, y, r.w - 12.0, 28.0);
+        let hg = ui.hit(gerenciar);
+        if hg.hover {
+            ui.c.fill(rrect(gerenciar.x, gerenciar.y, gerenciar.w, gerenciar.h, 6.0), &solid(rgba(0, 0, 0, if hg.down { 30 } else { 16 })));
+        }
+        ui.fonts.draw(ui.c, tr!("Gerenciar Extensões…"), r.x + 14.0, y + 19.0, 13.0, false, tinta());
+        if hg.clicked {
+            self.acao_menu("ext-gerenciar");
+            fechar = true;
+        }
+        // A click out of it (and out of the piece) or Esc closes it.
+        let (px, py) = ui.pointer();
+        let fora = !r.contains((px, py)) && !peca_r.contains((px, py));
+        if (ui.mouse_pressed() && fora) || ui.keys().iter().any(|k| k.key == glove_ui::ui::Key::Escape) {
+            fechar = true;
+        }
+        if fechar {
+            self.ext_painel = false;
+            self.mudou = true;
+        }
+    }
+
+    /// O botão de uma extensão: o ícone, o selo (`setBadgeText`) e a dica.
+    fn botao_extensao(&mut self, ui: &mut Ui, e: &extensoes::Extensao, r: Rect) {
+        let est = ponte::estado(&e.id);
+        let aberta = ponte::POPUP.with(|p| p.borrow().as_ref().is_some_and(|p| p.ext == e.id));
+        let h = ui.hit(r);
+        if (h.hover && !est.desligado) || aberta {
+            ui.c.fill(rrect(r.x, r.y, r.w, r.h, 6.0), &solid(rgba(0, 0, 0, if h.down || aberta { 34 } else { 18 })));
+        }
+        let (ix, iy) = (r.x + (r.w - 16.0) / 2.0, r.y + (r.h - 16.0) / 2.0);
+        self.icone_ext(ui, e, ix, iy);
+        let antes = std::mem::replace(&mut ui.c.dark_remap, false);
         if est.desligado {
             let fundo = if ui.theme.dark { rgba(40, 40, 44, 150) } else { rgba(236, 236, 236, 160) };
             ui.c.fill(rrect(ix - 1.0, iy - 1.0, 18.0, 18.0, 4.0), &solid(fundo));
@@ -2719,6 +2836,35 @@ fn cor_css(t: &str) -> Option<Color> {
         "white" => rgba(255, 255, 255, 255),
         _ => return None,
     })
+}
+
+/// A pin (pinned: filled), to put an extension on the bar.
+fn alfinete(c: &mut Canvas, cx: f32, cy: f32, cor: Color, cheio: bool) {
+    // The head, the plate under it and the needle.
+    let cabeca = rrect(cx - 3.5, cy - 7.0, 7.0, 6.0, 1.5);
+    if cheio {
+        c.fill(cabeca, &solid(cor));
+    } else {
+        c.stroke(cabeca, &solid(cor), 1.2);
+    }
+    let mut pb = tiny_skia::PathBuilder::new();
+    pb.move_to(cx - 5.5, cy - 0.5);
+    pb.line_to(cx + 5.5, cy - 0.5);
+    pb.move_to(cx, cy - 0.5);
+    pb.line_to(cx, cy + 7.0);
+    c.stroke_round(pb.finish(), &solid(cor), 1.4);
+}
+
+/// A small gear (the options of an extension).
+fn engrenagem(c: &mut Canvas, cx: f32, cy: f32, cor: Color) {
+    let mut pb = tiny_skia::PathBuilder::new();
+    for i in 0..8 {
+        let a = i as f32 * std::f32::consts::TAU / 8.0;
+        pb.move_to(cx + 4.5 * a.cos(), cy + 4.5 * a.sin());
+        pb.line_to(cx + 7.0 * a.cos(), cy + 7.0 * a.sin());
+    }
+    c.stroke_round(pb.finish(), &solid(cor), 2.0);
+    c.stroke(circle(cx, cy, 4.2), &solid(cor), 1.6);
 }
 
 /// A peça de quebra-cabeça (o botão das extensões).
@@ -3108,7 +3254,8 @@ impl App for Navegador {
                 ui.fonts.draw(ui.c, &t, linha.x + 8.0, linha.y + 16.0, 12.0, false, cor);
             }
         }
-        // A janelinha da extensão, por cima da página.
+        // A janelinha da peça (as extensões) e a de uma extensão, por cima da página.
+        self.painel_extensoes(ui);
         self.janelinha(ui);
         // Os atalhos que chegaram ao kit; o menu de contexto que a página pediu.
         self.teclas(ui);
@@ -3457,6 +3604,8 @@ fn main() -> std::process::ExitCode {
         imp_msg: None,
         ext_botoes: Vec::new(),
         ext_menu_rect: None,
+        ext_painel: false,
+        ext_fixadas: None,
         ext_icones: std::collections::HashMap::new(),
         ext_icones_de: (0, 0),
         popup_ancora: Rect::new(0.0, 0.0, 0.0, 0.0),

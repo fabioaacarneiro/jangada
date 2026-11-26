@@ -185,6 +185,36 @@ fn ativas_arquivo() -> PathBuf {
     pasta_extensoes().join("disabled.txt")
 }
 
+/// The extensions pinned to the bar (their button shows there; the others are in the
+/// puzzle piece). The first time (no list yet), all the ones with a button: the bar stays as
+/// it was before there was a choice.
+fn fixadas_arquivo() -> PathBuf {
+    pasta_extensoes().join("pinned.txt")
+}
+
+pub fn fixadas() -> Vec<String> {
+    match std::fs::read_to_string(fixadas_arquivo()) {
+        Ok(t) => t.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect(),
+        Err(_) => {
+            let v: Vec<String> = listar().into_iter().filter(|e| e.acao.is_some()).map(|e| e.id).collect();
+            let _ = std::fs::create_dir_all(pasta_extensoes());
+            let _ = std::fs::write(fixadas_arquivo(), v.join("\n") + "\n");
+            v
+        }
+    }
+}
+
+/// Pins (or unpins) an extension to the bar. Returns the list as it is now.
+pub fn fixar(id: &str, sim: bool) -> Vec<String> {
+    let mut v = fixadas();
+    v.retain(|x| x != id);
+    if sim {
+        v.push(id.to_string());
+    }
+    let _ = std::fs::write(fixadas_arquivo(), v.join("\n") + "\n");
+    v
+}
+
 fn desativadas() -> Vec<String> {
     std::fs::read_to_string(ativas_arquivo()).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()
 }
@@ -1469,5 +1499,17 @@ mod tests {
         let m: serde_json::Value = serde_json::from_str(r#"{"content_scripts":[{"matches":["*://*.youtube.com/*"],"js":["a.js"],"run_at":"document_start"},{"matches":["<all_urls>"],"js":["b.js"]}]}"#).unwrap();
         let regras: Vec<bool> = m["content_scripts"].as_array().unwrap().iter().map(|r| r["run_at"].as_str() == Some("document_start")).collect();
         assert_eq!(regras, [true, false]);
+    }
+
+    #[test]
+    fn fixar_na_barra() {
+        let _ = std::fs::remove_file(fixadas_arquivo());
+        // Sem a lista: as que têm botão (nenhuma instalada aqui).
+        assert!(fixadas().is_empty());
+        assert_eq!(fixar("a", true), vec!["a".to_string()]);
+        assert_eq!(fixar("b", true), vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(fixar("a", false), vec!["b".to_string()]);
+        assert_eq!(fixadas(), vec!["b".to_string()]);
+        let _ = std::fs::remove_file(fixadas_arquivo());
     }
 }

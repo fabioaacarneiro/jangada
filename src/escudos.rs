@@ -115,11 +115,29 @@ pub fn iniciar() {
     });
 }
 
+/// Converts the lists into rules in another thread (it takes a few seconds: on the first
+/// opening, in the main thread, the window froze) and compiles them in the main one (the
+/// WebKit only compiles there).
+fn montar_e_compilar(store: webkit6::UserContentFilterStore) {
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<String>>();
+    std::thread::spawn(move || {
+        let _ = tx.send(montar(&textos_das_listas()));
+    });
+    glib::timeout_add_local(Duration::from_millis(200), move || match rx.try_recv() {
+        Ok(json) => {
+            compilar(store.clone(), json);
+            glib::ControlFlow::Break
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(_) => glib::ControlFlow::Break,
+    });
+}
+
 /// Abre os filtros guardados (um por vez); sem nenhum, compila o que houver.
 fn carregar(store: webkit6::UserContentFilterStore, mut faltam: Vec<String>, mut prontos: Vec<webkit6::UserContentFilter>) {
     if faltam.is_empty() {
         if prontos.is_empty() {
-            compilar(store, montar(&textos_das_listas()));
+            montar_e_compilar(store);
         } else {
             crate::motor::usar_filtros(prontos);
         }
@@ -133,7 +151,7 @@ fn carregar(store: webkit6::UserContentFilterStore, mut faltam: Vec<String>, mut
             carregar(s2, faltam, prontos);
         }
         // Um faltou (a pasta foi limpa): compila de novo, das listas que houver.
-        Err(_) => compilar(s2, montar(&textos_das_listas())),
+        Err(_) => montar_e_compilar(s2),
     });
 }
 
