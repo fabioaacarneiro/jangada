@@ -68,6 +68,36 @@ fn fator(nivel: f64) -> f64 {
     1.2f64.powf(nivel)
 }
 
+/// Opens the folder of a downloaded file with the file already selected: the Files of
+/// Glove (`--show`); elsewhere, the file manager by the standard request (FileManager1
+/// ShowItems); last, just the folder.
+fn mostrar_na_pasta(arquivo: &std::path::Path) {
+    use std::process::{Command, Stdio};
+    let pasta = arquivo.parent().map(|p| p.to_path_buf()).unwrap_or_else(pasta_downloads);
+    if !arquivo.exists() {
+        let _ = Command::new("glove-files").arg(&pasta).spawn().or_else(|_| Command::new("xdg-open").arg(&pasta).spawn());
+        return;
+    }
+    if Command::new("glove-files").arg("--show").arg(arquivo).spawn().is_ok() {
+        return;
+    }
+    let uri = webkit6::gio::File::for_path(arquivo).uri().to_string();
+    let arquivo = arquivo.to_path_buf();
+    std::thread::spawn(move || {
+        let ok = Command::new("gdbus")
+            .args(["call", "--session", "--dest", "org.freedesktop.FileManager1", "--object-path", "/org/freedesktop/FileManager1", "--method", "org.freedesktop.FileManager1.ShowItems"])
+            .arg(format!("['{}']", uri.replace('\'', "%27")))
+            .arg("")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        if !ok {
+            let _ = Command::new("xdg-open").arg(arquivo.parent().unwrap_or(&arquivo)).spawn();
+        }
+    });
+}
+
 pub fn pasta_downloads() -> PathBuf {
     glove_config::arquivos::user_dir("DOWNLOAD").unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join("Downloads"))
 }
@@ -1797,8 +1827,7 @@ impl Navegador {
             let _ = std::process::Command::new("xdg-open").arg(&caminho).spawn();
         }
         if pasta {
-            let alvo = caminho.parent().map(|p| p.to_path_buf()).unwrap_or_else(pasta_downloads);
-            let _ = std::process::Command::new("glove-files").arg(&alvo).spawn().or_else(|_| std::process::Command::new("xdg-open").arg(&alvo).spawn());
+            mostrar_na_pasta(&caminho);
         }
         if cancelar {
             if let Some(id) = idx.and_then(|i| motor::DOWNLOADS.with(|l| l.borrow().get(i).map(|d| d.id))) {
