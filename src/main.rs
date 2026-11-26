@@ -3276,7 +3276,21 @@ fn caber(largura: Option<i32>, altura: Option<i32>) -> (u32, u32) {
     (w as u32, h as u32)
 }
 
+/// Where the engine travels with the Jangada (Slackware: the system has no WebKitGTK).
+const MOTOR_LIB: &str = "/usr/lib/jangada/motor/lib";
+
 fn main() -> std::process::ExitCode {
+    // The processes of the engine (the page, the network, the GPU) are other programs: with
+    // the engine of the package they must find its libraries too (the package also writes
+    // the path in them; this covers a package made before that). Still one thread only:
+    // changing the environment here is safe.
+    if std::path::Path::new(MOTOR_LIB).is_dir() {
+        let atual = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        if !atual.split(':').any(|p| p == MOTOR_LIB) {
+            let novo = if atual.is_empty() { MOTOR_LIB.to_string() } else { format!("{MOTOR_LIB}:{atual}") };
+            unsafe { std::env::set_var("LD_LIBRARY_PATH", novo) };
+        }
+    }
     if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
         if a == "--icons" {
             return gerar_icones(std::path::Path::new(&dir));
