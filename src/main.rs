@@ -15,6 +15,7 @@ mod inicio;
 mod motor;
 mod ponte;
 mod senhas;
+mod torrent;
 
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -392,8 +393,28 @@ struct Navegador {
     hist_tabela: TableState,
     /// Janela dos downloads: pedida, a escolha e a rolagem.
     down_abrir: bool,
-    down_sel: Option<usize>,
-    down_tabela: TableState,
+    down_sel: Option<u32>,
+    down_rolagem: f32,
+    down_altura: f32,
+    /// "+ Adicionar URL": o campo aberto, o endereço e o aviso de endereço inválido.
+    down_url_aberto: bool,
+    down_url: String,
+    down_url_msg: Option<String>,
+    down_url_foco: bool,
+    /// Downloads (0) ou Torrents (1).
+    down_aba: usize,
+    /// A aba Torrents: o escolhido, a rolagem, o link magnet, a folha Abrir, o aviso, a
+    /// confirmação de remover e quando a lista foi pedida.
+    tor_sel: Option<usize>,
+    tor_rolagem: f32,
+    tor_altura: f32,
+    tor_magnet_aberto: bool,
+    tor_magnet: String,
+    tor_magnet_foco: bool,
+    tor_folha: Option<glove_ui::FileBrowser>,
+    tor_msg: Option<String>,
+    tor_remover: Option<usize>,
+    tor_lido: Instant,
     /// Algo mudou fora dos eventos da janela (a batida redesenha).
     mudou: bool,
     /// Quando a sessão do Google foi conferida (Preferências ▸ Contas).
@@ -1404,6 +1425,11 @@ impl Navegador {
             }
         }
         self.pedidos_das_extensoes();
+        // Um link magnet ou um .torrent baixado foi para o ajudante: a aba Torrents abre.
+        if motor::ABRIR_TORRENTS.with(|a| a.replace(false)) {
+            self.down_abrir = true;
+            self.down_aba = 1;
+        }
         // window.close(): a página pediu para fechar a própria aba.
         while let Some(i) = self.abas.iter().position(|a| a.p.borrow().fechar) {
             self.fechar(i);
@@ -1594,6 +1620,27 @@ impl Navegador {
                     }
                 }
                 "importar" => self.imp_abrir = true,
+                "downloads" => {
+                    self.down_abrir = true;
+                    self.down_aba = 0;
+                }
+                "torrents" => {
+                    self.down_abrir = true;
+                    self.down_aba = 1;
+                }
+                "torrent-magnet" => {
+                    self.down_abrir = true;
+                    self.down_aba = 1;
+                    self.tor_magnet_aberto = true;
+                    self.tor_magnet_foco = true;
+                }
+                "baixar-url" => {
+                    self.down_abrir = true;
+                    self.down_aba = 0;
+                    self.down_url_aberto = true;
+                    self.down_url_foco = true;
+                    self.down_url_msg = None;
+                }
                 "codigo" => {
                     self.atalho("Ctrl+U", false);
                 }
@@ -1788,54 +1835,226 @@ impl Navegador {
         }
     }
 
-    /// A janela Downloads (Ctrl+J): o que foi baixado desta vez, com o andamento.
+    /// A janela Downloads (Ctrl+J): a lista dos downloads (os de antes também), cada um
+    /// com o ícone, o nome, de onde veio, a data e o tamanho, e a barra de progresso
+    /// enquanto baixa. "+ Adicionar URL" baixa um endereço colado (um "wget" na janela).
+    /// Fechar a janela não para nada.
     fn janela_downloads(&mut self, ui: &mut Ui) {
         let (w, h) = (ui.c.w, ui.c.h);
         ui.c.fill_rect(0.0, 0.0, w, h, &solid(ui.theme.body_a));
-        let linhas: Vec<TableRow> = motor::DOWNLOADS.with(|l| {
-            l.borrow().iter().rev().map(|d| {
-                let estado = if d.pronto {
-                    tr!("Pronto").to_string()
-                } else if d.falhou {
-                    tr!("Falhou").to_string()
-                } else if d.cancelado {
-                    tr!("Cancelado").to_string()
-                } else if d.total > 0 {
-                    format!("{}% · {}/s", d.recebido * 100 / d.total.max(1), tamanho(d.velocidade))
+        let accent = ui.theme.accent;
+        // Downloads | Torrents.
+        ui.area(Rect::new(10.0, 8.0, w - 20.0, SEGMENT_H), |ui| {
+            let mut aba = self.down_aba;
+            if ui.tabs(&mut aba, &[tr!("Downloads"), tr!("Torrents")]) {
+                self.down_aba = aba;
+                self.down_sel = None;
+                self.tor_sel = None;
+            }
+        });
+        if self.down_aba == 1 {
+            return self.aba_torrents(ui, 16.0 + SEGMENT_H);
+        }
+        // A barra de cima: Adicionar URL e o campo (quando aberto).
+        let mut topo = 16.0 + SEGMENT_H;
+        ui.area(Rect::new(10.0, topo, w - 20.0, 24.0), |ui| {
+            ui.horizontal(|ui| {
+                if ui.small_button(tr!("+ Adicionar URL…")) {
+                    self.down_url_aberto = !self.down_url_aberto;
+                    self.down_url_foco = self.down_url_aberto;
+                    self.down_url_msg = None;
+                }
+            });
+        });
+        topo += 30.0;
+        if self.down_url_aberto {
+            let bw = 80.0;
+            let fr = Rect::new(10.0, topo, w - 30.0 - bw, 22.0);
+            // O foco vai para o campo no quadro seguinte ao clique que o abriu (no mesmo
+            // quadro, o clique fora dele o tiraria).
+            let foco = self.down_url_foco && !ui.mouse_pressed();
+            if foco {
+                self.down_url_foco = false;
+            }
+            let (_, enter) = ui.text_field_in(fr, &mut self.down_url, foco);
+            let mut baixar = enter;
+            ui.area(Rect::new(w - 10.0 - bw, topo - 1.0, bw, 24.0), |ui| {
+                ui.set_active(!self.down_url.trim().is_empty());
+                baixar |= ui.button(tr!("Baixar"));
+                ui.set_active(true);
+            });
+            if baixar && !self.down_url.trim().is_empty() {
+                if motor::baixar_url(&self.down_url) {
+                    self.down_url.clear();
+                    self.down_url_aberto = false;
                 } else {
-                    tr!("Baixando… {}", tamanho(d.recebido))
-                };
-                let t = if d.total > 0 { tamanho(d.total) } else { tamanho(d.recebido) };
-                TableRow { cells: vec![d.nome.clone(), t, estado], ..Default::default() }
+                    self.down_url_msg = Some(tr!("Endereço inválido.").to_string());
+                }
+            }
+            topo += 28.0;
+            if let Some(m) = &self.down_url_msg {
+                ui.fonts.draw(ui.c, m, 12.0, topo + 8.0, 11.0, false, rgba(190, 40, 40, 255));
+                topo += 16.0;
+            }
+        }
+        // A lista, do mais novo para o mais velho.
+        struct Linha {
+            id: u32,
+            nome: String,
+            caminho: std::path::PathBuf,
+            info: String,
+            progresso: Option<Option<f32>>,
+            ruim: bool,
+        }
+        let hoje = glib::DateTime::now_local().ok().map(|d| d.format("%d/%m/%Y").map(|s| s.to_string()).unwrap_or_default()).unwrap_or_default();
+        let linhas: Vec<Linha> = motor::DOWNLOADS.with(|l| {
+            l.borrow().iter().rev().map(|d| {
+                let data = glib::DateTime::from_unix_local(d.quando).ok().map(|t| {
+                    let dia = t.format("%d/%m/%Y").map(|s| s.to_string()).unwrap_or_default();
+                    let hora = t.format("%H:%M").map(|s| s.to_string()).unwrap_or_default();
+                    if dia == hoje { tr!("Hoje, {}", hora) } else { format!("{dia} {hora}") }
+                }).unwrap_or_default();
+                let baixando = d.dl.is_some() && !d.pronto && !d.cancelado;
+                let mut partes: Vec<String> = Vec::new();
+                if baixando {
+                    if d.total > 0 {
+                        partes.push(format!("{} de {}", tamanho(d.recebido), tamanho(d.total)));
+                    } else {
+                        partes.push(tamanho(d.recebido));
+                    }
+                    if d.velocidade > 0 {
+                        partes.push(format!("{}/s", tamanho(d.velocidade)));
+                        if d.total > d.recebido {
+                            let s = (d.total - d.recebido) / d.velocidade.max(1);
+                            partes.push(if s >= 3600 { tr!("{} h restantes", s / 3600) } else if s >= 60 { tr!("{} min restantes", s / 60) } else { tr!("{} s restantes", s.max(1)) });
+                        }
+                    }
+                } else {
+                    if !d.origem.is_empty() {
+                        partes.push(d.origem.clone());
+                    }
+                    partes.push(data);
+                    if d.pronto {
+                        partes.push(tamanho(d.total.max(d.recebido)));
+                        if !d.caminho.exists() {
+                            partes.push(tr!("Apagado").to_string());
+                        }
+                    } else if d.falhou {
+                        partes.push(tr!("Falhou").to_string());
+                    } else {
+                        partes.push(tr!("Cancelado").to_string());
+                    }
+                }
+                Linha {
+                    id: d.id,
+                    nome: if d.nome.is_empty() { tr!("Preparando…").to_string() } else { d.nome.clone() },
+                    caminho: d.caminho.clone(),
+                    info: partes.join(" · "),
+                    progresso: baixando.then(|| (d.total > 0).then(|| d.recebido as f32 / d.total.max(1) as f32)),
+                    ruim: !d.pronto && !baixando,
+                }
             }).collect()
         });
-        let cols = [Column::new(tr!("Nome"), 0.55).fixed(), Column::new(tr!("Tamanho"), 0.17).right().fixed(), Column::new(tr!("Estado"), 0.28).fixed()];
-        let area = Rect::new(10.0, 10.0, w - 20.0, h - 10.0 - 46.0);
-        let r = ui.table(area, &cols, &linhas, self.down_sel, &mut self.down_tabela, &TableStyle { zebra: true, ..Default::default() });
-        if let Some(i) = r.pressed {
-            self.down_sel = Some(i);
+        let rodape = 44.0;
+        let area = Rect::new(10.0, topo, w - 20.0, h - topo - rodape);
+        ui.c.fill(rrect(area.x, area.y, area.w, area.h, 4.0), &solid(rgba(255, 255, 255, 255)));
+        ui.c.stroke(rrect(area.x + 0.5, area.y + 0.5, area.w - 1.0, area.h - 1.0, 4.0), &solid(rgba(0, 0, 0, 50)), 1.0);
+        let lh = 50.0;
+        if linhas.is_empty() {
+            let t = tr!("Nenhum download.");
+            let tw = ui.fonts.measure(t, 12.0, false);
+            ui.fonts.draw(ui.c, t, area.x + (area.w - tw) / 2.0, area.y + area.h / 2.0, 12.0, false, rgba(130, 130, 136, 255));
         }
-        let n = linhas.len();
-        // A escolha conta de trás para a frente (o mais novo em cima).
-        let idx = self.down_sel.filter(|i| *i < n).map(|i| n - 1 - i);
-        let (pronto, baixando, caminho) = motor::DOWNLOADS.with(|l| {
-            idx.and_then(|i| l.borrow().get(i).map(|d| (d.pronto, !d.pronto && !d.cancelado, d.caminho.clone()))).unwrap_or_default()
+        let mut abrir_id = None;
+        let mut rolagem = self.down_rolagem;
+        let altura = self.down_altura;
+        let sel = self.down_sel;
+        let mut nova_sel = None;
+        let nova_altura = ui.scroll_view(Rect::new(area.x + 1.0, area.y + 1.0, area.w - 2.0, area.h - 2.0), &mut rolagem, altura, |ui| {
+            let largura = ui.available_width();
+            for (k, l) in linhas.iter().enumerate() {
+                let r = ui.alloc(largura, lh);
+                let resp = ui.hit(r);
+                let escolhida = sel == Some(l.id);
+                if escolhida {
+                    ui.c.fill_rect(r.x, r.y, r.w, r.h, &solid(accent));
+                } else if k % 2 == 1 {
+                    ui.c.fill_rect(r.x, r.y, r.w, r.h, &solid(rgba(244, 245, 248, 255)));
+                }
+                if resp.pressed {
+                    nova_sel = Some(l.id);
+                }
+                if resp.double {
+                    abrir_id = Some(l.id);
+                }
+                let icone = glove_ui::paint::icons::file_icon(&l.caminho, l.caminho.is_dir());
+                glove_ui::paint::icons::draw(ui.c, ui.fonts, icone, r.x + 10.0, r.y + 9.0, 32.0, None);
+                let (c1, c2) = if escolhida { (rgba(255, 255, 255, 255), rgba(235, 240, 255, 255)) } else { (tinta(), if l.ruim { rgba(170, 60, 60, 255) } else { rgba(110, 110, 116, 255) }) };
+                let tx = r.x + 52.0;
+                let max = r.w - 52.0 - 12.0;
+                let nome = ui.fonts.ellipsize(&l.nome, 13.0, true, max);
+                ui.fonts.draw(ui.c, &nome, tx, r.y + 20.0, 13.0, true, c1);
+                match l.progresso {
+                    Some(p) => {
+                        let pw = (max * 0.45).clamp(80.0, 220.0);
+                        ui.progress_in(Rect::new(tx, r.y + 27.0, pw, 10.0), p);
+                        let info = ui.fonts.ellipsize(&l.info, 11.0, false, max - pw - 10.0);
+                        ui.fonts.draw(ui.c, &info, tx + pw + 10.0, r.y + 36.0, 11.0, false, c2);
+                    }
+                    None => {
+                        let info = ui.fonts.ellipsize(&l.info, 11.0, false, max);
+                        ui.fonts.draw(ui.c, &info, tx, r.y + 37.0, 11.0, false, c2);
+                    }
+                }
+            }
         });
-        let mut abrir = r.double.is_some() && pronto;
-        let (mut pasta, mut cancelar, mut limpar) = (false, false, false);
-        ui.area(Rect::new(10.0, h - 36.0, w - 20.0, 28.0), |ui| {
+        self.down_rolagem = rolagem;
+        if (nova_altura - self.down_altura).abs() > 0.5 {
+            self.down_altura = nova_altura;
+            self.mudou = true;
+        }
+        if let Some(id) = nova_sel {
+            self.down_sel = Some(id);
+        }
+        // Os botões de baixo, valendo para o escolhido.
+        let escolhido = self.down_sel.and_then(|id| motor::DOWNLOADS.with(|l| l.borrow().iter().find(|d| d.id == id).map(|d| (d.id, d.pronto, d.dl.is_some() && !d.pronto && !d.cancelado, d.caminho.clone(), !d.uri.is_empty()))));
+        let (pronto, baixando, existe, de_novo) = escolhido.as_ref().map(|e| (e.1, e.2, e.3.exists(), !e.1 && !e.2 && e.4)).unwrap_or_default();
+        let (mut abrir, mut pasta, mut cancelar, mut repetir, mut remover, mut limpar) = (false, false, false, false, false, false);
+        let tem_feitos = motor::DOWNLOADS.with(|l| l.borrow().iter().any(|d| d.pronto || d.cancelado));
+        ui.area(Rect::new(10.0, h - 34.0, w - 20.0, 26.0), |ui| {
             ui.horizontal(|ui| {
-                ui.set_active(pronto);
-                abrir |= ui.button(tr!("Abrir"));
-                ui.set_active(idx.is_some());
+                ui.set_active(pronto && existe);
+                abrir = ui.button(tr!("Abrir"));
+                ui.set_active(escolhido.is_some());
                 pasta = ui.button(tr!("Mostrar na Pasta"));
-                ui.set_active(baixando);
-                cancelar = ui.button(tr!("Cancelar"));
-                ui.set_active(n > 0);
-                limpar = ui.button(tr!("Limpar a Lista"));
+                if de_novo {
+                    ui.set_active(true);
+                    repetir = ui.button(tr!("Tentar de Novo"));
+                } else {
+                    ui.set_active(baixando);
+                    cancelar = ui.button(tr!("Cancelar"));
+                }
+                ui.set_active(escolhido.is_some());
+                remover = ui.button(tr!("Remover da Lista"));
+                ui.set_active(tem_feitos);
+                limpar = ui.button(tr!("Limpar Concluídos"));
                 ui.set_active(true);
             });
         });
+        if let Some(id) = abrir_id {
+            if let Some(c) = motor::DOWNLOADS.with(|l| l.borrow().iter().find(|d| d.id == id && d.pronto).map(|d| d.caminho.clone())) {
+                if c.exists() {
+                    let _ = std::process::Command::new("xdg-open").arg(&c).spawn();
+                }
+            }
+        }
+        let Some((id, _, _, caminho, _)) = escolhido else {
+            if limpar {
+                motor::limpar_concluidos();
+                self.mudou = true;
+            }
+            return;
+        };
         if abrir {
             let _ = std::process::Command::new("xdg-open").arg(&caminho).spawn();
         }
@@ -1843,14 +2062,219 @@ impl Navegador {
             mostrar_na_pasta(&caminho);
         }
         if cancelar {
-            if let Some(id) = idx.and_then(|i| motor::DOWNLOADS.with(|l| l.borrow().get(i).map(|d| d.id))) {
-                motor::cancelar_download(id);
-            }
+            motor::cancelar_download(id);
+        }
+        if repetir {
+            motor::tentar_de_novo(id);
+            self.down_sel = None;
+        }
+        if remover {
+            motor::remover_da_lista(id);
+            self.down_sel = None;
         }
         if limpar {
-            motor::DOWNLOADS.with(|l| l.borrow_mut().retain(|d| !d.pronto && !d.cancelado));
+            motor::limpar_concluidos();
             self.down_sel = None;
+        }
+        if abrir || pasta || cancelar || repetir || remover || limpar {
             self.mudou = true;
+        }
+    }
+
+    /// A aba Torrents: os torrents do ajudante (que baixa à parte e continua com a Jangada
+    /// fechada), com o andamento, as velocidades e os pares.
+    fn aba_torrents(&mut self, ui: &mut Ui, mut topo: f32) {
+        let (w, h) = (ui.c.w, ui.c.h);
+        let accent = ui.theme.accent;
+        // A lista é relida de segundo em segundo enquanto a aba está à vista.
+        if self.tor_lido.elapsed() >= Duration::from_millis(900) {
+            self.tor_lido = Instant::now();
+            torrent::atualizar();
+        }
+        ui.wake_after(Duration::from_secs(1));
+        if let Some(e) = torrent::tomar_erro() {
+            self.tor_msg = Some(e);
+        }
+        // Escolhendo um .torrent: a folha Abrir cobre a janela.
+        if let Some(fb) = &mut self.tor_folha {
+            match ui.file_sheet(fb) {
+                Some(glove_ui::Choice::Picked(p)) => {
+                    torrent::adicionar_arquivo(&p);
+                    self.tor_folha = None;
+                }
+                Some(glove_ui::Choice::Cancelled) => self.tor_folha = None,
+                None => return,
+            }
+        }
+        ui.area(Rect::new(10.0, topo, w - 20.0, 24.0), |ui| {
+            ui.horizontal(|ui| {
+                if ui.small_button(tr!("+ Adicionar .torrent…")) {
+                    self.tor_folha = Some(glove_ui::FileBrowser::open(Some(pasta_downloads()), &["torrent"]));
+                }
+                if ui.small_button(tr!("+ Link Magnet…")) {
+                    self.tor_magnet_aberto = !self.tor_magnet_aberto;
+                    self.tor_magnet_foco = self.tor_magnet_aberto;
+                    self.tor_msg = None;
+                }
+            });
+        });
+        topo += 30.0;
+        if self.tor_magnet_aberto {
+            let bw = 80.0;
+            let fr = Rect::new(10.0, topo, w - 30.0 - bw, 22.0);
+            let foco = self.tor_magnet_foco && !ui.mouse_pressed();
+            if foco {
+                self.tor_magnet_foco = false;
+            }
+            let (_, enter) = ui.text_field_in(fr, &mut self.tor_magnet, foco);
+            let mut ok = enter;
+            ui.area(Rect::new(w - 10.0 - bw, topo - 1.0, bw, 24.0), |ui| {
+                ui.set_active(!self.tor_magnet.trim().is_empty());
+                ok |= ui.button(tr!("Baixar"));
+                ui.set_active(true);
+            });
+            if ok && !self.tor_magnet.trim().is_empty() {
+                if self.tor_magnet.trim().starts_with("magnet:") {
+                    torrent::adicionar_magnet(self.tor_magnet.trim());
+                    self.tor_magnet.clear();
+                    self.tor_magnet_aberto = false;
+                } else {
+                    self.tor_msg = Some(tr!("O link precisa começar com magnet:").to_string());
+                }
+            }
+            topo += 28.0;
+        }
+        if let Some(m) = &self.tor_msg {
+            let m = ui.fonts.ellipsize(m, 11.0, false, w - 24.0);
+            ui.fonts.draw(ui.c, &m, 12.0, topo + 8.0, 11.0, false, rgba(190, 40, 40, 255));
+            topo += 16.0;
+        }
+        let lista = torrent::lista();
+        let rodape = 44.0;
+        let area = Rect::new(10.0, topo, w - 20.0, h - topo - rodape);
+        ui.c.fill(rrect(area.x, area.y, area.w, area.h, 4.0), &solid(rgba(255, 255, 255, 255)));
+        ui.c.stroke(rrect(area.x + 0.5, area.y + 0.5, area.w - 1.0, area.h - 1.0, 4.0), &solid(rgba(0, 0, 0, 50)), 1.0);
+        if lista.is_empty() {
+            let t = tr!("Nenhum torrent. Clique num link magnet ou num arquivo .torrent, ou adicione um aqui.");
+            let t = ui.fonts.ellipsize(t, 12.0, false, area.w - 20.0);
+            let tw = ui.fonts.measure(&t, 12.0, false);
+            ui.fonts.draw(ui.c, &t, area.x + (area.w - tw) / 2.0, area.y + area.h / 2.0, 12.0, false, rgba(130, 130, 136, 255));
+        }
+        let lh = 50.0;
+        let mut rolagem = self.tor_rolagem;
+        let sel = self.tor_sel;
+        let mut nova_sel = None;
+        let mut abrir = None;
+        let nova_altura = ui.scroll_view(Rect::new(area.x + 1.0, area.y + 1.0, area.w - 2.0, area.h - 2.0), &mut rolagem, self.tor_altura, |ui| {
+            let largura = ui.available_width();
+            for (k, t) in lista.iter().enumerate() {
+                let r = ui.alloc(largura, lh);
+                let resp = ui.hit(r);
+                let escolhida = sel == Some(t.id);
+                if escolhida {
+                    ui.c.fill_rect(r.x, r.y, r.w, r.h, &solid(accent));
+                } else if k % 2 == 1 {
+                    ui.c.fill_rect(r.x, r.y, r.w, r.h, &solid(rgba(244, 245, 248, 255)));
+                }
+                if resp.pressed {
+                    nova_sel = Some(t.id);
+                }
+                if resp.double {
+                    abrir = Some(t.caminho.clone());
+                }
+                let icone = glove_ui::paint::icons::file_icon(&t.caminho, t.caminho.is_dir());
+                glove_ui::paint::icons::draw(ui.c, ui.fonts, icone, r.x + 10.0, r.y + 9.0, 32.0, None);
+                let (c1, c2) = if escolhida { (rgba(255, 255, 255, 255), rgba(235, 240, 255, 255)) } else { (tinta(), if t.estado == torrent::Estado::Erro { rgba(170, 60, 60, 255) } else { rgba(110, 110, 116, 255) }) };
+                let tx = r.x + 52.0;
+                let max = r.w - 52.0 - 12.0;
+                let nome = if t.nome.is_empty() { tr!("Buscando as informações…").to_string() } else { t.nome.clone() };
+                let nome = ui.fonts.ellipsize(&nome, 13.0, true, max);
+                ui.fonts.draw(ui.c, &nome, tx, r.y + 20.0, 13.0, true, c1);
+                let info = info_torrent(t);
+                if matches!(t.estado, torrent::Estado::Baixando | torrent::Estado::Preparando) {
+                    let pw = (max * 0.4).clamp(80.0, 200.0);
+                    let p = (t.total > 0).then(|| t.feito as f32 / t.total as f32);
+                    ui.progress_in(Rect::new(tx, r.y + 27.0, pw, 10.0), p);
+                    let info = ui.fonts.ellipsize(&info, 11.0, false, max - pw - 10.0);
+                    ui.fonts.draw(ui.c, &info, tx + pw + 10.0, r.y + 36.0, 11.0, false, c2);
+                } else {
+                    let info = ui.fonts.ellipsize(&info, 11.0, false, max);
+                    ui.fonts.draw(ui.c, &info, tx, r.y + 37.0, 11.0, false, c2);
+                }
+            }
+        });
+        self.tor_rolagem = rolagem;
+        if (nova_altura - self.tor_altura).abs() > 0.5 {
+            self.tor_altura = nova_altura;
+            self.mudou = true;
+        }
+        if let Some(id) = nova_sel {
+            self.tor_sel = Some(id);
+        }
+        if let Some(c) = abrir.filter(|c| c.exists()) {
+            let _ = std::process::Command::new("xdg-open").arg(&c).spawn();
+        }
+        let escolhido = self.tor_sel.and_then(|id| lista.iter().find(|t| t.id == id).cloned());
+        let estado = escolhido.as_ref().map(|t| t.estado);
+        use torrent::Estado as E;
+        let (mut pausa, mut abrir_b, mut pasta, mut parar, mut remover) = (false, false, false, false, false);
+        ui.area(Rect::new(10.0, h - 34.0, w - 20.0, 26.0), |ui| {
+            ui.horizontal(|ui| {
+                ui.set_active(escolhido.is_some() && estado != Some(E::Erro));
+                let pausado = matches!(estado, Some(E::Pausado | E::Concluido));
+                pausa = ui.button(if pausado { tr!("Continuar") } else { tr!("Pausar") });
+                ui.set_active(escolhido.as_ref().is_some_and(|t| t.total > 0 && t.feito >= t.total && t.caminho.exists()));
+                abrir_b = ui.button(tr!("Abrir"));
+                ui.set_active(escolhido.is_some());
+                pasta = ui.button(tr!("Mostrar na Pasta"));
+                ui.set_active(estado == Some(E::Compartilhando));
+                parar = ui.button(tr!("Parar de Compartilhar"));
+                ui.set_active(escolhido.is_some());
+                remover = ui.button(tr!("Remover…"));
+                ui.set_active(true);
+            });
+        });
+        let Some(t) = escolhido else { return };
+        if pausa {
+            if matches!(t.estado, E::Pausado | E::Concluido) {
+                torrent::continuar(t.id);
+            } else {
+                torrent::pausar(t.id);
+            }
+        }
+        if abrir_b {
+            let _ = std::process::Command::new("xdg-open").arg(&t.caminho).spawn();
+        }
+        if pasta {
+            if t.caminho.exists() {
+                mostrar_na_pasta(&t.caminho);
+            } else {
+                mostrar_na_pasta(&torrent::pasta_torrents().join("."));
+            }
+        }
+        if parar {
+            torrent::parar_de_compartilhar(t.id);
+        }
+        if remover {
+            self.tor_remover = Some(t.id);
+        }
+        // Remover: só da lista, ou apagando também o que foi baixado.
+        if let Some(id) = self.tor_remover {
+            let nome = lista.iter().find(|x| x.id == id).map(|x| x.nome.clone()).unwrap_or_default();
+            match ui.alert(glove_ui::AlertKind::Caution, &tr!("Remover “{}”?", nome), tr!("Os arquivos baixados podem ficar na pasta ou ser apagados."), &[tr!("Cancelar"), tr!("Só da Lista"), tr!("Apagar os Arquivos")]) {
+                Some(1) => {
+                    torrent::remover(id, false);
+                    self.tor_remover = None;
+                    self.tor_sel = None;
+                }
+                Some(2) => {
+                    torrent::remover(id, true);
+                    self.tor_remover = None;
+                    self.tor_sel = None;
+                }
+                Some(_) => self.tor_remover = None,
+                None => {}
+            }
         }
     }
 
@@ -2335,6 +2759,46 @@ fn sem_troca(c: &mut Canvas, f: impl FnOnce(&mut Canvas)) {
 }
 
 /// Tamanho em bytes para gente ler (1,2 MB).
+/// A segunda linha de um torrent: o andamento, as velocidades e os pares, ou o estado.
+fn info_torrent(t: &torrent::Info) -> String {
+    use torrent::Estado as E;
+    let vel = |b: f64| format!("{}/s", tamanho(b as i64));
+    let de = if t.total > 0 { format!("{} de {}", tamanho(t.feito as i64), tamanho(t.total as i64)) } else { String::new() };
+    let mut p: Vec<String> = Vec::new();
+    match t.estado {
+        E::Preparando => p.push(tr!("Conferindo…").to_string()),
+        E::Baixando => {
+            if !de.is_empty() {
+                p.push(de);
+            }
+            p.push(format!("↓ {}", vel(t.descida)));
+            p.push(format!("↑ {}", vel(t.subida)));
+            p.push(tr!("{} pares", t.pares));
+            if let Some(s) = t.falta {
+                p.push(if s >= 3600 { tr!("{} h restantes", s / 3600) } else if s >= 60 { tr!("{} min restantes", s / 60) } else { tr!("{} s restantes", s.max(1)) });
+            }
+        }
+        E::Compartilhando => {
+            p.push(tr!("Compartilhando").to_string());
+            p.push(format!("↑ {}", vel(t.subida)));
+            p.push(tr!("{} pares", t.pares));
+            p.push(tr!("enviado {}", tamanho(t.enviado as i64)));
+        }
+        E::Pausado => {
+            p.push(tr!("Pausado").to_string());
+            if !de.is_empty() {
+                p.push(de);
+            }
+        }
+        E::Concluido => {
+            p.push(tr!("Concluído").to_string());
+            p.push(tamanho(t.total as i64));
+        }
+        E::Erro => p.push(t.erro.clone().unwrap_or_else(|| tr!("Erro").to_string())),
+    }
+    p.join(" · ")
+}
+
 fn tamanho(b: i64) -> String {
     let b = b.max(0) as f64;
     let (v, u) = if b >= 1e9 { (b / 1e9, "GB") } else if b >= 1e6 { (b / 1e6, "MB") } else if b >= 1e3 { (b / 1e3, "KB") } else { (b, "bytes") };
@@ -3016,10 +3480,16 @@ impl App for Navegador {
                 MenuItem::new("menor", tr!("Diminuir"), "Ctrl+-"),
                 MenuItem::new("real", tr!("Tamanho Padrão"), "Ctrl+0"),
                 MenuItem::Separator,
-                MenuItem::new("downloads", tr!("Mostrar os Downloads"), "Ctrl+J"),
-                MenuItem::Separator,
                 MenuItem::new("codigo", tr!("Ver Código-Fonte"), "Ctrl+U"),
                 MenuItem::new("dev", tr!("Ferramentas do Desenvolvedor"), "Ctrl+Shift+I"),
+            ]),
+            Menu::new(tr!("Downloads"), vec![
+                MenuItem::new("downloads", tr!("Mostrar os Downloads"), "Ctrl+J"),
+                MenuItem::Separator,
+                MenuItem::new("baixar-url", tr!("Adicionar URL…"), ""),
+                MenuItem::Separator,
+                MenuItem::new("torrents", tr!("Mostrar os Torrents"), ""),
+                MenuItem::new("torrent-magnet", tr!("Adicionar Link Magnet…"), ""),
             ]),
             Menu::new(tr!("Histórico"), m_hist),
             Menu::new(tr!("Favoritos"), m_favs),
@@ -3083,7 +3553,7 @@ impl App for Navegador {
             ui.open_window(JANELA_IMPORTAR, WindowOptions { title: tr!("Importar de Outro Navegador").into(), app_id: "glove.Browser".into(), size: (460, 330), fixed: true, min_size: None });
         }
         if std::mem::take(&mut self.down_abrir) {
-            ui.open_window(JANELA_DOWN, WindowOptions { title: tr!("Downloads").into(), app_id: "glove.Browser".into(), size: (560, 340), fixed: false, min_size: Some((380, 200)) });
+            ui.open_window(JANELA_DOWN, WindowOptions { title: tr!("Downloads").into(), app_id: "glove.Browser".into(), size: (660, 400), fixed: false, min_size: Some((560, 240)) });
         }
         // O botão vermelho da barra.
         if std::mem::take(&mut self.fechar_janela) && self.close_requested() {
@@ -3473,6 +3943,8 @@ fn main() -> std::process::ExitCode {
             return 0.into();
         }
         Some("--install") => return instalar_pela_linha(&args[2..]),
+        // O ajudante dos torrents (a Jangada o liga sozinha; ele fica rodando à parte).
+        Some("--torrent-daemon") => return torrent::ajudante(),
         Some("--extensions") => {
             for e in extensoes::listar() {
                 println!("{}\t{} {}\t{}", e.id, e.nome, e.versao, if e.ativa { "ativa" } else { "desligada" });
@@ -3592,7 +4064,23 @@ fn main() -> std::process::ExitCode {
         hist_tabela: TableState::default(),
         down_abrir: false,
         down_sel: None,
-        down_tabela: TableState::default(),
+        down_rolagem: 0.0,
+        down_altura: 0.0,
+        down_url_aberto: false,
+        down_url: String::new(),
+        down_url_msg: None,
+        down_url_foco: false,
+        down_aba: 0,
+        tor_sel: None,
+        tor_rolagem: 0.0,
+        tor_altura: 0.0,
+        tor_magnet_aberto: false,
+        tor_magnet: String::new(),
+        tor_magnet_foco: false,
+        tor_folha: None,
+        tor_msg: None,
+        tor_remover: None,
+        tor_lido: Instant::now(),
         mudou: true,
         google_lido: Instant::now() - Duration::from_secs(10),
         fundo_imagem,
@@ -3649,6 +4137,8 @@ fn main() -> std::process::ExitCode {
     // Jangada (como no Safari), e sobra mais espaço para a página.
     glove_ui::use_own_frame_main();
     let opts = WindowOptions { title: "Jangada".into(), app_id: "glove.Browser".into(), size: tamanho_inicial(), fixed: false, min_size: Some((560, 380)) };
+    // Torrents guardados de antes: o ajudante volta a rodar e continua de onde parou.
+    torrent::retomar_se_preciso();
     let r = run(opts, nav);
     if !privada {
         let _ = std::fs::remove_file(&sock);

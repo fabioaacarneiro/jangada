@@ -129,6 +129,12 @@ pub struct Download_ {
     pub dl: Option<Download>,
     /// Para calcular a velocidade: (quando, quanto).
     marca: (std::time::Instant, i64),
+    /// O endereço do arquivo (para baixar de novo).
+    pub uri: String,
+    /// De onde veio (o site).
+    pub origem: String,
+    /// Quando começou (segundos desde 1970).
+    pub quando: i64,
 }
 
 pub use Download_ as Baixado;
@@ -156,6 +162,8 @@ thread_local! {
     pub static IMPRIMIR: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     /// Mudou algo nos downloads (a janela redesenha).
     pub static DOWNLOADS_MUDOU: Cell<bool> = const { Cell::new(false) };
+    /// Um link magnet ou um .torrent foi para o ajudante: a janela abre a aba Torrents.
+    pub static ABRIR_TORRENTS: Cell<bool> = const { Cell::new(false) };
     /// Há uma sessão do Google aberta (os cookies da conta existem)?
     pub static GOOGLE: Cell<bool> = const { Cell::new(false) };
     /// Os pedidos de permissão à espera da pergunta (um por vez): (origem, chaves, pedido).
@@ -279,6 +287,7 @@ pub fn iniciar(privada: bool, dados: &Path, aj: &crate::ajustes::Ajustes) {
         dm.set_favicons_enabled(true);
     }
     sessao.connect_download_started(|_, d| novo_download(d));
+    carregar_downloads();
     let ctx = WebContext::default();
     if let Some(ctx) = &ctx {
         // As páginas e os arquivos das extensões: um esquema seguro (as APIs que pedem
@@ -789,6 +798,14 @@ fn ligar(p: &Shared, view: &WebView) {
             let Some(n) = d.downcast_ref::<NavigationPolicyDecision>() else { return false };
             let Some(acao) = n.navigation_action() else { return false };
             let url = acao.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+            // Um link magnet: o torrent vai para o ajudante (a página fica onde está).
+            if url.starts_with("magnet:") {
+                d.ignore();
+                crate::torrent::adicionar_magnet(&url);
+                ABRIR_TORRENTS.with(|a| a.set(true));
+                glove_ui::redraw_soon();
+                return true;
+            }
             if url.starts_with(ESQUEMA) {
                 let atual = v.uri().map(|u| u.to_string()).unwrap_or_default();
                 let historico = matches!(acao.navigation_type(), webkit6::NavigationType::BackForward | webkit6::NavigationType::Reload);
@@ -1230,7 +1247,10 @@ fn novo_download(d: &Download) {
         return;
     }
     let id = PROXIMO_DOWNLOAD.with(|n| n.replace(n.get() + 1));
-    DOWNLOADS.with(|l| l.borrow_mut().push(Baixado { id, nome: String::new(), caminho: PathBuf::new(), recebido: 0, total: 0, velocidade: 0, pronto: false, cancelado: false, falhou: false, dl: Some(d.clone()), marca: (std::time::Instant::now(), 0) }));
+    // De onde veio: o site da página que pediu (ou o do próprio arquivo).
+    let pagina = d.web_view().and_then(|v| v.uri()).map(|u| u.to_string()).unwrap_or_default();
+    let origem = host_de(if pagina.starts_with("http") { &pagina } else { &uri });
+    DOWNLOADS.with(|l| l.borrow_mut().push(Baixado { id, nome: String::new(), caminho: PathBuf::new(), recebido: 0, total: 0, velocidade: 0, pronto: false, cancelado: false, falhou: false, dl: Some(d.clone()), marca: (std::time::Instant::now(), 0), uri: uri.clone(), origem, quando: agora() }));
     // Vai direto para a pasta Downloads (sem perguntar), com um nome livre.
     d.connect_decide_destination(move |d, sugerido| {
         let nome = if sugerido.is_empty() { "download".to_string() } else { sugerido.replace('/', "_") };
@@ -1266,17 +1286,26 @@ fn novo_download(d: &Download) {
             eprintln!("download pronto: {:?}", d.destination());
         }
         let mut nome = String::new();
+        let mut caminho = PathBuf::new();
         atualizar(id, |x| {
             if !x.cancelado {
                 x.pronto = true;
                 x.recebido = x.recebido.max(x.total);
                 nome = x.nome.clone();
+                caminho = x.caminho.clone();
             }
             x.dl = None;
         });
+        // Um arquivo .torrent: vai direto para o ajudante (e a aba Torrents abre).
+        let e_torrent = caminho.extension().is_some_and(|e| e.eq_ignore_ascii_case("torrent")) || d.response().and_then(|r| r.mime_type()).is_some_and(|m| m == "application/x-bittorrent");
+        if e_torrent && caminho.is_file() {
+            crate::torrent::adicionar_arquivo(&caminho);
+            ABRIR_TORRENTS.with(|a| a.set(true));
+        }
         if !nome.is_empty() {
             AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Baixado em Downloads: {}", nome)));
         }
+        gravar_downloads();
     });
     d.connect_failed(move |_, _| {
         // Cancelar também chega aqui: só é falha se ninguém cancelou.
@@ -1292,6 +1321,7 @@ fn novo_download(d: &Download) {
         if let Some(nome) = falhou {
             AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Não foi possível baixar {}", if nome.is_empty() { "download".to_string() } else { nome })));
         }
+        gravar_downloads();
     });
 }
 
@@ -1315,6 +1345,115 @@ pub fn cancelar_download(id: u32) {
         d.cancel();
     }
     DOWNLOADS_MUDOU.with(|m| m.set(true));
+    gravar_downloads();
+}
+
+/// Baixa um endereço (o "+ Adicionar URL" da janela Downloads), como um clique num link.
+pub fn baixar_url(url: &str) -> bool {
+    let url = url.trim();
+    let url = if url.contains("://") { url.to_string() } else { format!("https://{url}") };
+    if glib::Uri::parse(&url, glib::UriFlags::NONE).is_err() {
+        return false;
+    }
+    com(|m| {
+        m.sessao.download_uri(&url);
+    });
+    true
+}
+
+/// Baixa de novo um download que falhou ou foi cancelado (ele sai da lista; o novo entra).
+pub fn tentar_de_novo(id: u32) {
+    let uri = DOWNLOADS.with(|l| {
+        let mut l = l.borrow_mut();
+        let i = l.iter().position(|x| x.id == id)?;
+        let uri = l[i].uri.clone();
+        (!uri.is_empty()).then(|| l.remove(i).uri)
+    });
+    if let Some(u) = uri {
+        baixar_url(&u);
+    }
+    DOWNLOADS_MUDOU.with(|m| m.set(true));
+    gravar_downloads();
+}
+
+/// Tira da lista (o arquivo continua na pasta). Um em andamento é cancelado antes.
+pub fn remover_da_lista(id: u32) {
+    let dl = DOWNLOADS.with(|l| {
+        let mut l = l.borrow_mut();
+        let i = l.iter().position(|x| x.id == id)?;
+        l.remove(i).dl
+    });
+    if let Some(d) = dl {
+        d.cancel();
+    }
+    DOWNLOADS_MUDOU.with(|m| m.set(true));
+    gravar_downloads();
+}
+
+/// Tira da lista os que já terminaram (prontos, cancelados, com falha).
+pub fn limpar_concluidos() {
+    DOWNLOADS.with(|l| l.borrow_mut().retain(|d| !d.pronto && !d.cancelado));
+    DOWNLOADS_MUDOU.with(|m| m.set(true));
+    gravar_downloads();
+}
+
+fn agora() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+/// O site de um endereço ("www.exemplo.com" → "exemplo.com").
+pub fn host_de(url: &str) -> String {
+    let h = glib::Uri::parse(url, glib::UriFlags::NONE).ok().and_then(|u| u.host()).map(|h| h.to_string()).unwrap_or_default();
+    h.strip_prefix("www.").map(str::to_string).unwrap_or(h)
+}
+
+/// A lista guardada: os downloads que já terminaram (os mais recentes, até 300).
+const LISTA_DOWNLOADS: &str = "downloads.tsv";
+
+fn gravar_downloads() {
+    if crate::ajustes::privada() {
+        return;
+    }
+    let linhas: Vec<String> = DOWNLOADS.with(|l| {
+        let l = l.borrow();
+        let feitos: Vec<&Baixado> = l.iter().filter(|d| d.dl.is_none() && !d.nome.is_empty()).collect();
+        let tira = feitos.len().saturating_sub(300);
+        feitos[tira..]
+            .iter()
+            .map(|d| {
+                let estado = if d.pronto { "ok" } else if d.falhou { "falhou" } else { "cancelado" };
+                let limpo = |t: &str| t.replace(['\t', '\n'], " ");
+                format!("{}\t{}\t{}\t{}\t{}\t{}\t{}", d.quando, estado, d.total.max(d.recebido), limpo(&d.nome), limpo(&d.caminho.to_string_lossy()), limpo(&d.uri), limpo(&d.origem))
+            })
+            .collect()
+    });
+    let _ = std::fs::write(crate::ajustes::pasta().join(LISTA_DOWNLOADS), linhas.join("\n") + "\n");
+}
+
+/// Lê a lista guardada (ao abrir a Jangada): os downloads de antes voltam à janela.
+pub fn carregar_downloads() {
+    if crate::ajustes::privada() {
+        return;
+    }
+    let texto = std::fs::read_to_string(crate::ajustes::pasta().join(LISTA_DOWNLOADS)).unwrap_or_default();
+    let antes: Vec<Baixado> = texto
+        .lines()
+        .filter_map(|l| {
+            let c: Vec<&str> = l.split('\t').collect();
+            if c.len() < 7 {
+                return None;
+            }
+            let id = PROXIMO_DOWNLOAD.with(|n| n.replace(n.get() + 1));
+            let total = c[2].parse().unwrap_or(0);
+            Some(Baixado { id, nome: c[3].into(), caminho: PathBuf::from(c[4]), recebido: total, total, velocidade: 0, pronto: c[1] == "ok", cancelado: c[1] != "ok", falhou: c[1] == "falhou", dl: None, marca: (std::time::Instant::now(), 0), uri: c[5].into(), origem: c[6].into(), quando: c[0].parse().unwrap_or(0) })
+        })
+        .collect();
+    DOWNLOADS.with(|l| {
+        let mut l = l.borrow_mut();
+        let novos = std::mem::take(&mut *l);
+        *l = antes;
+        l.extend(novos);
+    });
 }
 
 /// Um nome que ainda não existe ("arquivo (2).zip").

@@ -741,3 +741,111 @@ msgstr "Image copied"
 
 msgid "Não foi possível copiar a imagem"
 msgstr "Could not copy the image"
+
+msgid "+ Adicionar URL…"
+msgstr "+ Add URL…"
+
+msgid "Adicionar URL…"
+msgstr "Add URL…"
+
+msgid "Baixar"
+msgstr "Download"
+
+msgid "Endereço inválido."
+msgstr "Invalid address."
+
+msgid "Hoje, {}"
+msgstr "Today, {}"
+
+msgid "{} h restantes"
+msgstr "{} h left"
+
+msgid "{} min restantes"
+msgstr "{} min left"
+
+msgid "{} s restantes"
+msgstr "{} s left"
+
+msgid "Apagado"
+msgstr "Deleted"
+
+msgid "Preparando…"
+msgstr "Preparing…"
+
+msgid "Nenhum download."
+msgstr "No downloads."
+
+msgid "Remover da Lista"
+msgstr "Remove from List"
+
+msgid "Limpar Concluídos"
+msgstr "Clear Finished"
+
+msgid "Torrents"
+msgstr "Torrents"
+
+msgid "+ Adicionar .torrent…"
+msgstr "+ Add .torrent…"
+
+msgid "+ Link Magnet…"
+msgstr "+ Magnet Link…"
+
+msgid "O link precisa começar com magnet:"
+msgstr "The link must start with magnet:"
+
+msgid "Nenhum torrent. Clique num link magnet ou num arquivo .torrent, ou adicione um aqui."
+msgstr "No torrents. Click a magnet link or a .torrent file, or add one here."
+
+msgid "Buscando as informações…"
+msgstr "Fetching the information…"
+
+msgid "Continuar"
+msgstr "Resume"
+
+msgid "Pausar"
+msgstr "Pause"
+
+msgid "Parar de Compartilhar"
+msgstr "Stop Sharing"
+
+msgid "Remover…"
+msgstr "Remove…"
+
+msgid "Remover “{}”?"
+msgstr "Remove “{}”?"
+
+msgid "Os arquivos baixados podem ficar na pasta ou ser apagados."
+msgstr "The downloaded files can stay in the folder or be deleted."
+
+msgid "Só da Lista"
+msgstr "From List Only"
+
+msgid "Apagar os Arquivos"
+msgstr "Delete the Files"
+
+msgid "Conferindo…"
+msgstr "Checking…"
+
+msgid "{} pares"
+msgstr "{} peers"
+
+msgid "Compartilhando"
+msgstr "Sharing"
+
+msgid "enviado {}"
+msgstr "sent {}"
+
+msgid "Pausado"
+msgstr "Paused"
+
+msgid "Erro"
+msgstr "Error"
+
+msgid "Mostrar os Torrents"
+msgstr "Show Torrents"
+
+msgid "Adicionar Link Magnet…"
+msgstr "Add Magnet Link…"
+
+msgid "O ajudante de torrents não abriu."
+msgstr "The torrent helper did not start."

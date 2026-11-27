@@ -51,7 +51,7 @@ Exec=jangada %U
 Icon=jangada
 Terminal=false
 Categories=Network;WebBrowser;
-MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;x-scheme-handler/magnet;application/x-bittorrent;
 StartupWMClass=glove.Browser
 Keywords=web;internet;navegador;browser;
 DESK

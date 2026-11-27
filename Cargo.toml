@@ -2,7 +2,7 @@
 name = "jangada"
 # Jangada, o navegador do Glove OS: o motor do WebKitGTK (o do sistema, atualizado pela
 # distribuição) dentro de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
-version = "2.1.9"
+version = "2.2.0"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
@@ -33,6 +33,12 @@ sha1 = "0.10"
 # O motor de bloqueio do Brave lê as listas (EasyList etc.) e as converte para os filtros
 # nativos do WebKit (o formato do Safari: barrados pelo próprio motor, sem script na página).
 adblock = { version = "0.13", default-features = false, features = ["embedded-domain-resolver", "full-regex-handling", "content-blocking"] }
+
+# Torrents: o motor de BitTorrent (no ajudante `jangada --torrent-daemon`, um processo à
+# parte) e o tokio que ele usa.
+librqbit = { version = "9.1", default-features = false, features = ["rust-tls"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+anyhow = "1"
 
 [dev-dependencies]
 # Só para o teste de padrões (regex_do_padrao): confere a conversão para expressão regular.
