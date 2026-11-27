@@ -146,6 +146,9 @@ thread_local! {
     pub static AVISOS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Os downloads desta vez (a janela Downloads), do mais velho para o mais novo.
     pub static DOWNLOADS: RefCell<Vec<Baixado>> = const { RefCell::new(Vec::new()) };
+    /// Imagens pedidas por "Copiar Imagem": baixadas para um arquivo temporário e postas
+    /// na área de transferência (não entram na lista de downloads).
+    static COPIAR_IMAGEM: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// Os scripts `document_start` das extensões postos em cada aba (para tirar e pôr de
     /// novo quando as extensões mudam).
     static INICIO: RefCell<Vec<(glib::WeakRef<WebView>, Vec<webkit6::UserScript>)>> = const { RefCell::new(Vec::new()) };
@@ -1166,7 +1169,66 @@ fn notificar(titulo: &str, corpo: &str) {
 // Downloads
 // ---------------------------------------------------------------------------
 
+/// "Copiar Imagem": o motor baixa a imagem (com os cookies do site, como a página a vê)
+/// e ela vai para a área de transferência como PNG.
+pub fn copiar_imagem(view: &WebView, uri: &str) {
+    let Some(s) = view.network_session() else { return };
+    COPIAR_IMAGEM.with(|l| l.borrow_mut().push(uri.to_string()));
+    s.download_uri(uri);
+}
+
+fn copiar_download(d: &Download) {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!("jangada-imagem-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    d.set_allow_overwrite(true);
+    let dest = tmp.clone();
+    d.connect_decide_destination(move |d, _| {
+        d.set_destination(&dest.to_string_lossy());
+        true
+    });
+    let dest = tmp.clone();
+    d.connect_finished(move |d| {
+        let mime = d.response().and_then(|r| r.mime_type()).map(|m| m.to_string()).unwrap_or_default();
+        // Qualquer formato que o GTK abre (JPEG, WebP, GIF…) vira PNG, que todo app cola.
+        let png = gdk::Texture::from_filename(&dest).ok().map(|t| t.save_to_png_bytes().to_vec());
+        let ok = match png {
+            Some(b) => por_na_area(&b, "image/png"),
+            None => std::fs::read(&dest).ok().is_some_and(|b| mime.starts_with("image/") && por_na_area(&b, &mime)),
+        };
+        let _ = std::fs::remove_file(&dest);
+        AVISOS.with(|a| a.borrow_mut().push(if ok { glove_config::tr!("Imagem copiada").to_string() } else { glove_config::tr!("Não foi possível copiar a imagem").to_string() }));
+        glove_ui::redraw_soon();
+    });
+    d.connect_failed(move |_, _| {
+        let _ = std::fs::remove_file(&tmp);
+        AVISOS.with(|a| a.borrow_mut().push(glove_config::tr!("Não foi possível copiar a imagem").to_string()));
+        glove_ui::redraw_soon();
+    });
+}
+
+/// Põe os bytes na área de transferência, com o tipo dado.
+fn por_na_area(dados: &[u8], tipo: &str) -> bool {
+    use std::io::Write;
+    let Ok(mut c) = std::process::Command::new("wl-copy").args(["--type", tipo]).stdin(std::process::Stdio::piped()).spawn() else { return false };
+    if let Some(mut i) = c.stdin.take() {
+        if i.write_all(dados).is_err() {
+            return false;
+        }
+    }
+    c.wait().is_ok_and(|s| s.success())
+}
+
 fn novo_download(d: &Download) {
+    let uri = d.request().and_then(|r| r.uri()).map(|u| u.to_string()).unwrap_or_default();
+    if !uri.is_empty() && COPIAR_IMAGEM.with(|l| {
+        let mut l = l.borrow_mut();
+        l.iter().position(|u| *u == uri).map(|i| l.remove(i)).is_some()
+    }) {
+        copiar_download(d);
+        return;
+    }
     let id = PROXIMO_DOWNLOAD.with(|n| n.replace(n.get() + 1));
     DOWNLOADS.with(|l| l.borrow_mut().push(Baixado { id, nome: String::new(), caminho: PathBuf::new(), recebido: 0, total: 0, velocidade: 0, pronto: false, cancelado: false, falhou: false, dl: Some(d.clone()), marca: (std::time::Instant::now(), 0) }));
     // Vai direto para a pasta Downloads (sem perguntar), com um nome livre.

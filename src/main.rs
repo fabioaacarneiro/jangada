@@ -1483,6 +1483,8 @@ impl Navegador {
         }
         if !c.image.is_empty() {
             itens.push(MenuItem::new("ctx-img-aba", tr!("Abrir Imagem em Nova Aba"), ""));
+            itens.push(MenuItem::new("ctx-img-copiar", tr!("Copiar Imagem"), ""));
+            itens.push(MenuItem::new("ctx-img-copiar-link", tr!("Copiar Endereço da Imagem"), ""));
             itens.push(MenuItem::Separator);
         }
         if c.editable {
@@ -1525,6 +1527,12 @@ impl Navegador {
         match id {
             "ctx-link-aba" => self.abrir(&c.link),
             "ctx-img-aba" => self.abrir(&c.image),
+            "ctx-img-copiar" => {
+                if let Some(v) = &b {
+                    motor::copiar_imagem(v, &c.image);
+                }
+            }
+            "ctx-img-copiar-link" => copiar_texto(&c.image),
             "ctx-link-copiar" => copiar_texto(&c.link),
             "ctx-link-favorito" => {
                 if !self.eh_favorito(&c.link) {
@@ -3437,6 +3445,14 @@ fn main() -> std::process::ExitCode {
             let novo = if atual.is_empty() { MOTOR_LIB.to_string() } else { format!("{MOTOR_LIB}:{atual}") };
             unsafe { std::env::set_var("LD_LIBRARY_PATH", novo) };
         }
+    }
+    // The page is painted by the processor (several threads) and the video card only puts
+    // the pieces together on the screen. Painting on the video card (the default of the
+    // engine since 2.46) left white areas after scrolling for a while and short freezes
+    // (new content waits for the card to prepare its drawings) on Intel cards. The page
+    // processes inherit this. JANGADA_GPU_PAINT=1 goes back to painting on the card.
+    if std::env::var_os("JANGADA_GPU_PAINT").is_none() && std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
+        unsafe { std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1") };
     }
     if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
         if a == "--icons" {

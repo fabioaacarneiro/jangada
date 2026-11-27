@@ -729,3 +729,15 @@ msgstr "Pin to Toolbar"
 
 msgid "Tirar da barra"
 msgstr "Unpin from Toolbar"
+
+msgid "Copiar Imagem"
+msgstr "Copy Image"
+
+msgid "Copiar Endereço da Imagem"
+msgstr "Copy Image Address"
+
+msgid "Imagem copiada"
+msgstr "Image copied"
+
+msgid "Não foi possível copiar a imagem"
+msgstr "Could not copy the image"
