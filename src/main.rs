@@ -356,6 +356,10 @@ struct Navegador {
     sugestoes_de: Option<String>,
     sugestao_sel: Option<usize>,
     sugestao_area: Option<Rect>,
+    /// A lista mostra as buscas recentes (o campo acabou de ganhar o cursor, sem nada
+    /// digitado ainda), como no Safari.
+    sugestoes_buscas: bool,
+    buscas: Vec<String>,
     /// O histórico inteiro (para as sugestões; a lista do menu é só dos últimos).
     recentes_todos: Vec<(String, String)>,
     /// Os últimos do histórico (para o menu).
@@ -675,7 +679,17 @@ impl Navegador {
     }
 
     fn carregar(&mut self, url: &str) {
+        if url == LIMPAR_BUSCAS {
+            ajustes::limpar_buscas();
+            self.buscas.clear();
+            return;
+        }
+        let digitado = url;
         let url = endereco(url, &self.inicio, self.aj.busca_url());
+        // Virou uma busca (não era um endereço): entra nas buscas recentes.
+        if url == format!("{}{}", self.aj.busca_url(), codificar(digitado.trim())) {
+            self.buscas = ajustes::anotar_busca(digitado);
+        }
         let v = self.aba().map(|a| {
             let mut p = a.p.borrow_mut();
             p.fonte = false;
@@ -1074,7 +1088,29 @@ impl Navegador {
             let digitado = self.barra.trim().to_string();
             if enter {
                 // a lista e a escolha ficam como estavam
+            } else if self.barra_foco && !self.barra_mexida && !self.buscas.is_empty() {
+                // Acabou de clicar no campo: as buscas recentes (e Limpar, no fim).
+                if !self.sugestoes_buscas {
+                    self.sugestoes = self.buscas.iter().take(10).map(|b| (b.clone(), b.clone())).collect();
+                    self.sugestoes.push((tr!("Limpar Buscas Recentes").to_string(), LIMPAR_BUSCAS.to_string()));
+                    self.sugestoes_buscas = true;
+                    self.sugestoes_de = None;
+                    self.sugestao_sel = None;
+                }
+                let baixo = ui.keys().iter().filter(|k| k.key == glove_ui::ui::Key::Down).count();
+                let cima = ui.keys().iter().filter(|k| k.key == glove_ui::ui::Key::Up).count();
+                let n = self.sugestoes.len();
+                for _ in 0..baixo {
+                    self.sugestao_sel = Some(self.sugestao_sel.map_or(0, |i| (i + 1).min(n - 1)));
+                }
+                for _ in 0..cima {
+                    self.sugestao_sel = match self.sugestao_sel {
+                        Some(0) | None => None,
+                        Some(i) => Some(i - 1),
+                    };
+                }
             } else if self.barra_foco && !digitado.is_empty() && self.barra_mexida {
+                self.sugestoes_buscas = false;
                 // Only when the text changed: going through the whole history on every
                 // frame made typing here drag.
                 if self.sugestoes_de.as_deref() != Some(digitado.as_str()) {
@@ -1104,6 +1140,7 @@ impl Navegador {
                 self.sugestoes.clear();
                 self.sugestoes_de = None;
                 self.sugestao_sel = None;
+                self.sugestoes_buscas = false;
             }
             if enter {
                 let t = match self.sugestao_sel.and_then(|i| self.sugestoes.get(i)) {
@@ -2706,6 +2743,9 @@ fn fr_sugestao_w(w: f32) -> f32 {
 }
 
 /// Qual sugestão está na altura `y` (contada do topo da lista): 4 de margem e 26 por linha.
+/// O item "Limpar Buscas Recentes" da lista da barra (não é um endereço).
+const LIMPAR_BUSCAS: &str = "jangada:limpar-buscas";
+
 fn sugestao_na_altura(y: f32, n: usize) -> Option<usize> {
     let i = ((y - 4.0) / 26.0).floor();
     (i >= 0.0 && (i as usize) < n).then_some(i as usize)
@@ -3728,8 +3768,28 @@ impl App for Navegador {
                     ui.c.fill(rrect(linha.x, linha.y, linha.w, linha.h, 5.0), &solid(ui.theme.accent));
                 }
                 let cor = if ativa { Color::WHITE } else { tinta() };
-                let t = ui.fonts.ellipsize(&format!("{}   {}", titulo, mostrar(url)), 12.0, false, linha.w - 16.0);
-                ui.fonts.draw(ui.c, &t, linha.x + 8.0, linha.y + 16.0, 12.0, false, cor);
+                if self.sugestoes_buscas {
+                    // A busca (com o reloginho) ou, no fim, Limpar.
+                    let limpar = url == LIMPAR_BUSCAS;
+                    let x = linha.x + 8.0;
+                    if !limpar {
+                        let (cx, cy) = (x + 6.0, linha.y + 12.0);
+                        let mut pb = tiny_skia::PathBuilder::new();
+                        pb.push_circle(cx, cy, 5.5);
+                        pb.move_to(cx, cy - 3.0);
+                        pb.line_to(cx, cy);
+                        pb.line_to(cx + 2.5, cy + 1.5);
+                        if let Some(p) = pb.finish() {
+                            ui.c.stroke(Some(p), &solid(if ativa { Color::WHITE } else { rgba(130, 130, 136, 255) }), 1.2);
+                        }
+                    }
+                    let tx = if limpar { x } else { x + 20.0 };
+                    let t = ui.fonts.ellipsize(titulo, 12.0, false, linha.w - (tx - linha.x) - 8.0);
+                    ui.fonts.draw(ui.c, &t, tx, linha.y + 16.0, 12.0, false, if limpar && !ativa { rgba(110, 110, 116, 255) } else { cor });
+                } else {
+                    let t = ui.fonts.ellipsize(&format!("{}   {}", titulo, mostrar(url)), 12.0, false, linha.w - 16.0);
+                    ui.fonts.draw(ui.c, &t, linha.x + 8.0, linha.y + 16.0, 12.0, false, cor);
+                }
             }
         }
         // A janelinha da peça (as extensões) e a de uma extensão, por cima da página.
@@ -3916,12 +3976,22 @@ fn main() -> std::process::ExitCode {
             unsafe { std::env::set_var("LD_LIBRARY_PATH", novo) };
         }
     }
-    // The page is painted by the processor (several threads) and the video card only puts
-    // the pieces together on the screen. Painting on the video card (the default of the
-    // engine since 2.46) left white areas after scrolling for a while and short freezes
-    // (new content waits for the card to prepare its drawings) on Intel cards. The page
-    // processes inherit this. JANGADA_GPU_PAINT=1 goes back to painting on the card.
-    if std::env::var_os("JANGADA_GPU_PAINT").is_none() && std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
+    // GTK draws the window with OpenGL, not Vulkan. Since GTK 4.16 Vulkan is the default
+    // on Wayland, and there the pages of the engine (handed over as dmabufs by the page
+    // process) came with areas that stayed white and froze for seconds on Intel cards:
+    // lazy images and the rest of the feed stopped loading until something forced a new
+    // frame. With OpenGL the frames of the page go straight to the screen, as the engine
+    // expects. GSK_RENDERER set by the user wins (GSK_RENDERER=vulkan goes back).
+    if std::env::var_os("GSK_RENDERER").is_none() {
+        unsafe { std::env::set_var("GSK_RENDERER", "ngl") };
+    }
+    // The memory tuning of the kit is for the single-thread programs of the Glove: the
+    // browser has many threads and big buffers (one arena and small mmap thresholds made
+    // every frame of the page a round of system calls).
+    unsafe { std::env::set_var("GLOVE_DEFAULT_MALLOC", "1") };
+    // JANGADA_CPU_PAINT=1: the page is painted by the processor (the engine paints on the
+    // video card by default, faster).
+    if std::env::var_os("JANGADA_CPU_PAINT").is_some() && std::env::var_os("WEBKIT_SKIA_ENABLE_CPU_RENDERING").is_none() {
         unsafe { std::env::set_var("WEBKIT_SKIA_ENABLE_CPU_RENDERING", "1") };
     }
     if let (Some(a), Some(dir)) = (std::env::args().nth(1), std::env::args().nth(2)) {
@@ -4039,6 +4109,8 @@ fn main() -> std::process::ExitCode {
         favoritos,
         sugestoes: Vec::new(),
         sugestoes_de: None,
+        sugestoes_buscas: false,
+        buscas: ajustes::buscas_recentes(),
         sugestao_sel: None,
         sugestao_area: None,
         recentes_todos: Vec::new(),

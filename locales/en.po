@@ -849,3 +849,6 @@ msgstr "Add Magnet Link…"
 
 msgid "O ajudante de torrents não abriu."
 msgstr "The torrent helper did not start."
+
+msgid "Limpar Buscas Recentes"
+msgstr "Clear Recent Searches"

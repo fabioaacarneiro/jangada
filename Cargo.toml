@@ -2,7 +2,7 @@
 name = "jangada"
 # Jangada, o navegador do Glove OS: o motor do WebKitGTK (o do sistema, atualizado pela
 # distribuição) dentro de uma janela do glove-ui (o kit gráfico do Glove, submódulo ui/).
-version = "2.2.0"
+version = "2.2.1"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 # O motor: o WebKitGTK 6.0 (GTK 4), o da distribuição.
-webkit6 = "0.6"
+webkit6 = { version = "0.6", features = ["v2_42"] }
 glove-ui = { path = "ui/crates/ui", features = ["gtk"] }
 glove-config = { path = "ui/crates/config" }
 # O motor de bloqueio do Brave (EasyList, EasyPrivacy, filtros cosméticos).

@@ -315,6 +315,7 @@ pub fn iniciar(privada: bool, dados: &Path, aj: &crate::ajustes::Ajustes) {
     ajustes.set_enable_encrypted_media(true);
     ajustes.set_media_playback_requires_user_gesture(false);
     ajustes.set_enable_site_specific_quirks(true);
+    recursos_do_motor(&ajustes);
     // Os sites veem o Safari (o motor é o mesmo): mandam a versão completa deles, e os que
     // conferem a versão do navegador (WhatsApp Web, bancos) aceitam. O WebKit ainda corrige
     // por site o que algum site exigir (as "quirks" ligadas acima).
@@ -408,8 +409,18 @@ fn conteudo(m: &Motor) -> UserContentManager {
         texto(MOUSE_PRESO)
     );
     ucm.add_script(&webkit6::UserScript::for_world(&pronto, UserContentInjectedFrames::TopFrame, webkit6::UserScriptInjectionTime::End, MUNDO, &[], &[]));
+    ucm.add_script(&webkit6::UserScript::for_world(&COR_DE_FUNDO.replace("{MUNDO}", MUNDO), UserContentInjectedFrames::TopFrame, webkit6::UserScriptInjectionTime::End, MUNDO, &[], &[]));
     ucm
 }
+
+/// O que a página ainda não pintou (rolando rápido) mostra o fundo do motor: com a cor da
+/// página, como no Safari, e não um clarão branco no meio de um site escuro. A cor é a do
+/// html, a do body ou, nos sites que pintam o fundo num elemento por cima de tudo (o
+/// YouTube), a do primeiro elemento com fundo no meio da tela. Refeita quando o site troca
+/// de tema (classe ou atributo do html e do body).
+const COR_DE_FUNDO: &str = r#"(function(){var u='';function g(x){if(!x||!x.nodeType)return null;var v=getComputedStyle(x).backgroundColor;if(!v||v==='transparent'||/rgba\([^)]*,\s*0\)$/.test(v))return null;return v}
+function c(){var d=document,v=g(d.documentElement)||g(d.body);if(!v){var e=d.elementFromPoint(innerWidth/2,innerHeight-8);while(e&&!v){v=g(e);e=e.parentElement}}v=v||'rgb(255, 255, 255)';if(v!==u){u=v;window.webkit.messageHandlers.{MUNDO}.postMessage('jangada-fundo:'+v)}}
+c();var t=0,o=new MutationObserver(function(){clearTimeout(t);t=setTimeout(c,150)});o.observe(document.documentElement,{attributes:true});if(document.body)o.observe(document.body,{attributes:true});addEventListener('load',function(){setTimeout(c,300)});setTimeout(c,1500);setTimeout(c,5000)})();"#;
 
 /// O aviso de "documento pronto" (vem do mundo isolado: a página não consegue mandá-lo).
 const PRONTO: &str = "\u{1}JANGADA:pronto";
@@ -419,6 +430,37 @@ const MOUSE_PRESO: &str = "\u{1}JANGADA:mouse";
 const NAO_RASTREAR: &str = "(function(){try{Object.defineProperty(Navigator.prototype,'globalPrivacyControl',{get:function(){return true},configurable:true});Object.defineProperty(Navigator.prototype,'doNotTrack',{get:function(){return '1'},configurable:true})}catch(e){}})();";
 
 /// Uma aba nova. `relacionada`: a aba que pediu (window.open: a nova fica ligada a ela).
+/// Recursos internos do motor (os "feature flags" do WebKit). `JANGADA_FEATURES` liga ou
+/// desliga para testar ("Nome=0,Outro=1"); `JANGADA_LIST_FEATURES` mostra todos.
+fn recursos_do_motor(ajustes: &Settings) {
+    let Some(todos) = Settings::all_features() else { return };
+    // JANGADA_SYNC_SCROLL=1: the page scrolls together with its drawing (never shows what
+    // was not painted yet, but each step waits for the page).
+    let sync = std::env::var_os("JANGADA_SYNC_SCROLL").is_some();
+    let mut pedidos: Vec<(String, bool)> = if sync { vec![("AsyncFrameScrolling".into(), false), ("ThreadedScrolling".into(), false)] } else { Vec::new() };
+    // What was already painted stays (scrolling back up showed only the page color while
+    // the engine painted it all again).
+    pedidos.push(("AggressiveTileRetention".into(), true));
+    pedidos.extend(
+        std::env::var("JANGADA_FEATURES")
+            .unwrap_or_default()
+            .split(',')
+            .filter_map(|p| p.split_once('=').map(|(n, v)| (n.trim().to_string(), v.trim() != "0"))),
+    );
+    let listar = std::env::var_os("JANGADA_LIST_FEATURES").is_some();
+    for i in 0..todos.length() {
+        let Some(f) = todos.get(i) else { continue };
+        let id = f.identifier().map(|s| s.to_string()).unwrap_or_default();
+        // The last one asked wins (the user's over the defaults).
+        if let Some((_, v)) = pedidos.iter().rev().find(|(n, _)| *n == id) {
+            ajustes.set_feature_enabled(&f, *v);
+        }
+        if listar {
+            eprintln!("{id}={}", ajustes.is_feature_enabled(&f) as u8);
+        }
+    }
+}
+
 pub fn nova_aba(url: &str, relacionada: Option<&WebView>) -> Option<Shared> {
     let view = com(|m| {
         let ucm = conteudo(m);
@@ -631,14 +673,30 @@ fn ligar(p: &Shared, view: &WebView) {
             });
         });
     }
-    // O link sob o mouse.
+    // O link sob o mouse. O motor avisa a cada elemento que passa sob o mouse (rolando, sem
+    // parar): a Jangada só redesenha quando o link mudou e depois de o mouse parar nele um
+    // instante, como o Safari (redesenhar a cada aviso tirava a fluidez da rolagem).
     {
-        let c = com_pagina.clone();
+        let fraco = fraco.clone();
+        let vez = Rc::new(Cell::new(0u64));
         view.connect_mouse_target_changed(move |_, hit, _| {
             let s = if hit.context_is_link() { hit.link_uri().map(|u| u.to_string()).unwrap_or_default() } else { String::new() };
-            c(&|p| {
-                if p.status != s {
-                    p.status = s.clone();
+            let n = vez.get().wrapping_add(1);
+            vez.set(n);
+            let (fraco, vez) = (fraco.clone(), vez.clone());
+            // Saindo do link, some logo; um link novo aparece se o mouse ficar nele.
+            let espera = if s.is_empty() { 0 } else { 120 };
+            glib::timeout_add_local_once(std::time::Duration::from_millis(espera), move || {
+                if vez.get() != n {
+                    return;
+                }
+                if let Some(p) = fraco.upgrade() {
+                    if let Ok(mut p) = p.try_borrow_mut() {
+                        if p.status != s {
+                            p.status = s;
+                            p.mudou();
+                        }
+                    }
                 }
             });
         });
@@ -1035,6 +1093,14 @@ pub fn janelinha(e: &Extensao, caminho: &str) -> Option<WebView> {
 
 /// Uma mensagem de um script da Jangada na página (senhas, extensões).
 fn mensagem(view: &WebView, m: &str) {
+    // A cor de fundo da página (ver COR_DE_FUNDO).
+    if let Some(cor) = m.strip_prefix("jangada-fundo:") {
+        if let Ok(mut c) = gdk::RGBA::parse(cor) {
+            c.set_alpha(1.0);
+            view.set_background_color(&c);
+        }
+        return;
+    }
     let url = view.uri().map(|u| u.to_string()).unwrap_or_default();
     if m == PRONTO {
         // Um por vez: um erro de escrita no script de uma extensão não leva os outros.

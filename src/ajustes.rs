@@ -264,6 +264,31 @@ fn gravar_lista(nome: &str, v: &[(String, String)]) {
     let _ = std::fs::write(pasta().join(nome), t);
 }
 
+/// As buscas feitas pela barra de endereço, da mais recente para a mais antiga.
+pub fn buscas_recentes() -> Vec<String> {
+    std::fs::read_to_string(pasta().join("searches.txt")).unwrap_or_default().lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
+}
+
+/// Mais uma busca: vai para o começo (sem repetir; guarda as 20 últimas).
+pub fn anotar_busca(t: &str) -> Vec<String> {
+    let t = t.trim().replace(['\n', '\r'], " ");
+    let mut v = buscas_recentes();
+    if t.is_empty() {
+        return v;
+    }
+    v.retain(|b| b.to_lowercase() != t.to_lowercase());
+    v.insert(0, t);
+    v.truncate(20);
+    if !privada() {
+        let _ = std::fs::write(pasta().join("searches.txt"), v.join("\n") + "\n");
+    }
+    v
+}
+
+pub fn limpar_buscas() {
+    let _ = std::fs::remove_file(pasta().join("searches.txt"));
+}
+
 pub fn favoritos() -> Vec<(String, String)> {
     ler_lista("bookmarks.tsv")
 }
